@@ -2,7 +2,7 @@ import { prisma } from '../config/db.js';
 import { tenantWhere, flattenInput, toApi } from './serialize.js';
 import { asyncHandler, AppError } from './errors.js';
 import { hashPassword } from './password.js';
-import { parsePaging, pageResult } from './paging.js';
+import { parsePaging, pageFromRows } from './paging.js';
 
 const NESTED_LISTS = {
   transportRoute: {
@@ -75,16 +75,13 @@ export function createCrud(model, options = {}) {
     list: asyncHandler(async (req, res) => {
       const where = whereFromReq(req);
       const { page, limit, skip } = parsePaging(req);
-      const [items, total] = await Promise.all([
-        db.findMany({
-          ...findArgs(where),
-          orderBy: { createdAt: 'desc' },
-          skip,
-          take: limit,
-        }),
-        db.count({ where }),
-      ]);
-      res.json(pageResult(toApi(items), total, page, limit));
+      const items = await db.findMany({
+        ...findArgs(where),
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      });
+      res.json(pageFromRows(toApi(items), page, limit, skip));
     }),
 
     get: asyncHandler(async (req, res) => {

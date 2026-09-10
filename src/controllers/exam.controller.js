@@ -1,7 +1,7 @@
 import { prisma } from '../config/db.js';
 import { tenantWhere, flattenInput, toApi } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
-import { parsePaging, pageResult } from '../utils/paging.js';
+import { parsePaging, pageFromRows, pageResult } from '../utils/paging.js';
 
 function gradeFor(pct) {
   if (pct >= 90) return 'A+';
@@ -16,17 +16,14 @@ function gradeFor(pct) {
 export const listExams = asyncHandler(async (req, res) => {
   const where = tenantWhere(req, {});
   const { page, limit, skip } = parsePaging(req);
-  const [items, total] = await Promise.all([
-    prisma.exam.findMany({
-      where,
-      orderBy: { startDate: 'desc' },
-      skip,
-      take: limit,
-      select: { id: true, name: true, type: true, status: true, startDate: true, endDate: true },
-    }),
-    prisma.exam.count({ where }),
-  ]);
-  res.json(pageResult(toApi(items), total, page, limit));
+  const items = await prisma.exam.findMany({
+    where,
+    orderBy: { startDate: 'desc' },
+    skip,
+    take: limit,
+    select: { id: true, name: true, type: true, status: true, startDate: true, endDate: true },
+  });
+  res.json(pageFromRows(toApi(items), page, limit, skip));
 });
 
 export const createExam = asyncHandler(async (req, res) => {

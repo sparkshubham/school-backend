@@ -42,22 +42,21 @@ export function createApp() {
   app.use(cookieParser());
   app.use('/uploads', express.static(path.join(__dirname, '..', process.env.UPLOAD_DIR || 'uploads')));
 
-  const health = async (req, res) => {
-    let db = 'unknown';
-    try {
-      await prisma.$queryRaw`SELECT 1`;
-      db = 'up';
-    } catch (err) {
-      db = 'down';
-      console.error('Health DB check failed:', err.message);
-    }
-    const status = db === 'down' ? 503 : 200;
-    res.status(status).json({ ok: db !== 'down', name: 'EduNest API', db });
+  const health = (req, res) => {
+    res.json({ ok: true, name: 'EduNest API' });
   };
 
   app.get('/', health);
   app.get('/api', health);
-  app.get('/api/health', health);
+  app.get('/api/health', async (req, res) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      res.json({ ok: true, name: 'EduNest API', db: 'up' });
+    } catch (err) {
+      console.error('Health DB check failed:', err.message);
+      res.status(503).json({ ok: false, name: 'EduNest API', db: 'down' });
+    }
+  });
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1', apiRoutes);
   app.use(notFound);

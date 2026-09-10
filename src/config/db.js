@@ -12,11 +12,10 @@ function runtimeDatabaseUrl() {
   try {
     const u = new URL(raw);
     if (u.hostname.includes('pooler.supabase.com')) {
-      u.searchParams.set('pool_timeout', '20');
+      u.searchParams.set('connect_timeout', '10');
+      u.searchParams.set('pool_timeout', '10');
       if (!u.searchParams.get('sslmode')) u.searchParams.set('sslmode', 'require');
       if (process.env.VERCEL) {
-        // Session mode (5432) caps at ~15 clients and fails on Vercel.
-        // Transaction mode (6543) multiplexes many serverless functions.
         u.port = '6543';
         u.searchParams.set('pgbouncer', 'true');
         u.searchParams.set('connection_limit', '1');

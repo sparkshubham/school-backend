@@ -4,7 +4,7 @@ import { asyncHandler, AppError } from '../utils/errors.js';
 import { signAccessToken, signRefreshToken, publicUser, authPayload } from '../utils/tokens.js';
 import { hashPassword } from '../utils/password.js';
 import { flattenInput, toApi, tenantWhere } from '../utils/serialize.js';
-import { parsePaging, pageResult } from '../utils/paging.js';
+import { parsePaging, pageFromRows } from '../utils/paging.js';
 
 export const listSchools = asyncHandler(async (req, res) => {
   const q = (req.query.q || '').trim();
@@ -19,31 +19,28 @@ export const listSchools = asyncHandler(async (req, res) => {
   if (req.query.status) where.status = req.query.status;
   if (req.query.plan) where.plan = req.query.plan;
   const { page, limit, skip } = parsePaging(req);
-  const [items, total, statusRows] = await Promise.all([
-    prisma.tenant.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        city: true,
-        plan: true,
-        status: true,
-        createdAt: true,
-      },
-    }),
-    prisma.tenant.count({ where }),
-    prisma.tenant.groupBy({ by: ['status'], _count: { _all: true } }),
-  ]);
+  const items = await prisma.tenant.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    skip,
+    take: limit,
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      city: true,
+      plan: true,
+      status: true,
+      createdAt: true,
+    },
+  });
+  const statusRows = await prisma.tenant.groupBy({ by: ['status'], _count: { _all: true } });
   const counts = { total: 0, active: 0, trial: 0, expired: 0, suspended: 0 };
   for (const row of statusRows) {
     counts[row.status] = row._count?._all ?? 0;
     counts.total += counts[row.status];
   }
-  res.json({ ...pageResult(toApi(items), total, page, limit), counts, plans: PLANS });
+  res.json({ ...pageFromRows(toApi(items), page, limit, skip), counts, plans: PLANS });
 });
 
 export const createSchool = asyncHandler(async (req, res) => {
@@ -87,13 +84,11 @@ export const createSchool = asyncHandler(async (req, res) => {
 export const getSchool = asyncHandler(async (req, res) => {
   const school = await prisma.tenant.findUnique({ where: { id: req.params.id } });
   if (!school) throw new AppError('School not found', 404);
-  const [admins, branches] = await Promise.all([
-    prisma.user.findMany({
-      where: { tenantId: school.id, role: 'school_admin' },
-      omit: { password: true },
-    }),
-    prisma.branch.findMany({ where: { tenantId: school.id } }),
-  ]);
+  const admins = await prisma.user.findMany({
+    where: { tenantId: school.id, role: 'school_admin' },
+    omit: { password: true },
+  });
+  const branches = await prisma.branch.findMany({ where: { tenantId: school.id } });
   res.json({ school: toApi(school), admins: toApi(admins), branches: toApi(branches), plans: PLANS });
 });
 
@@ -132,53 +127,47 @@ export const getMeta = asyncHandler(async (req, res) => {
   );
   const jobs = [];
   const keys = [];
-  const add = (key, promise) => {
+  const add = (key, run) => {
     if (!requested.has(key)) return;
     keys.push(key);
-    jobs.push(promise);
+    jobs.push(run);
   };
-  add(
-    'classes',
+  add('classes', () =>
     prisma.schoolClass.findMany({
       where,
       orderBy: [{ order: 'asc' }, { numeric: 'asc' }],
       select: { id: true, name: true, numeric: true },
     })
   );
-  add(
-    'sections',
+  add('sections', () =>
     prisma.section.findMany({
       where,
       include: { class: { select: { id: true, name: true } } },
       orderBy: { name: 'asc' },
     })
   );
-  add(
-    'subjects',
+  add('subjects', () =>
     prisma.subject.findMany({
       where,
       orderBy: { name: 'asc' },
       select: { id: true, name: true, code: true },
     })
   );
-  add(
-    'periods',
+  add('periods', () =>
     prisma.period.findMany({
       where,
       orderBy: { order: 'asc' },
       select: { id: true, name: true, order: true, startTime: true, endTime: true, isBreak: true },
     })
   );
-  add(
-    'sessions',
+  add('sessions', () =>
     prisma.academicSession.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       select: { id: true, name: true, isCurrent: true, startDate: true, endDate: true },
     })
   );
-  add(
-    'teachers',
+  add('teachers', () =>
     prisma.teacher.findMany({
       where,
       select: { id: true, name: true, employeeId: true, status: true },
@@ -186,7 +175,10 @@ export const getMeta = asyncHandler(async (req, res) => {
       take: 100,
     })
   );
-  const values = jobs.length ? await Promise.all(jobs) : [];
+  const values = [];
+  for (const job of jobs) {
+    values.push(await job());
+  }
   const out = { classes: [], sections: [], subjects: [], periods: [], sessions: [], teachers: [] };
   keys.forEach((key, i) => {
     out[key] = toApi(values[i]);
@@ -195,10 +187,8 @@ export const getMeta = asyncHandler(async (req, res) => {
 });
 
 export const getProfile = asyncHandler(async (req, res) => {
-  const [school, branches] = await Promise.all([
-    prisma.tenant.findUnique({ where: { id: req.tenantId } }),
-    prisma.branch.findMany({ where: { tenantId: req.tenantId } }),
-  ]);
+  const school = await prisma.tenant.findUnique({ where: { id: req.tenantId } });
+  const branches = await prisma.branch.findMany({ where: { tenantId: req.tenantId } });
   res.json({ school: toApi(school), branches: toApi(branches) });
 });
 

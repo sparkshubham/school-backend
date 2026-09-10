@@ -1,7 +1,7 @@
 import { prisma } from '../config/db.js';
 import { tenantWhere, flattenInput, toApi } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
-import { parsePaging, pageResult } from '../utils/paging.js';
+import { parsePaging, pageFromRows } from '../utils/paging.js';
 
 function receiptNo() {
   return `RCP-${Date.now().toString(36).toUpperCase()}`;
@@ -26,16 +26,13 @@ const invoiceListInclude = {
 export const listStructures = asyncHandler(async (req, res) => {
   const where = tenantWhere(req, {});
   const { page, limit, skip } = parsePaging(req);
-  const [items, total] = await Promise.all([
-    prisma.feeStructure.findMany({
-      where,
-      include: structureInclude,
-      skip,
-      take: limit,
-    }),
-    prisma.feeStructure.count({ where }),
-  ]);
-  res.json(pageResult(toApi(items), total, page, limit));
+  const items = await prisma.feeStructure.findMany({
+    where,
+    include: structureInclude,
+    skip,
+    take: limit,
+  });
+  res.json(pageFromRows(toApi(items), page, limit, skip));
 });
 
 export const saveStructure = asyncHandler(async (req, res) => {
@@ -120,17 +117,14 @@ export const listInvoices = asyncHandler(async (req, res) => {
   if (req.query.status) filter.status = req.query.status;
   if (req.query.studentId) filter.studentId = req.query.studentId;
   const { page, limit, skip } = parsePaging(req);
-  const [items, total] = await Promise.all([
-    prisma.feeInvoice.findMany({
-      where: filter,
-      include: invoiceListInclude,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-    }),
-    prisma.feeInvoice.count({ where: filter }),
-  ]);
-  res.json(pageResult(toApi(items), total, page, limit));
+  const items = await prisma.feeInvoice.findMany({
+    where: filter,
+    include: invoiceListInclude,
+    orderBy: { createdAt: 'desc' },
+    skip,
+    take: limit,
+  });
+  res.json(pageFromRows(toApi(items), page, limit, skip));
 });
 
 export const collect = asyncHandler(async (req, res) => {
@@ -171,20 +165,17 @@ export const payments = asyncHandler(async (req, res) => {
   const filter = tenantWhere(req, {});
   if (req.query.studentId) filter.studentId = req.query.studentId;
   const { page, limit, skip } = parsePaging(req);
-  const [items, total] = await Promise.all([
-    prisma.feePayment.findMany({
-      where: filter,
-      include: {
-        student: { select: { id: true, firstName: true, lastName: true } },
-        invoice: { select: { id: true, invoiceNo: true } },
-      },
-      orderBy: { paidAt: 'desc' },
-      skip,
-      take: limit,
-    }),
-    prisma.feePayment.count({ where: filter }),
-  ]);
-  res.json(pageResult(toApi(items), total, page, limit));
+  const items = await prisma.feePayment.findMany({
+    where: filter,
+    include: {
+      student: { select: { id: true, firstName: true, lastName: true } },
+      invoice: { select: { id: true, invoiceNo: true } },
+    },
+    orderBy: { paidAt: 'desc' },
+    skip,
+    take: limit,
+  });
+  res.json(pageFromRows(toApi(items), page, limit, skip));
 });
 
 export const feeReport = asyncHandler(async (req, res) => {

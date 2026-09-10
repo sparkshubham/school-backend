@@ -2,7 +2,7 @@ import { prisma } from '../config/db.js';
 import { tenantWhere, flattenInput, toApi } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
 import { hashPassword } from '../utils/password.js';
-import { parsePaging, pageResult } from '../utils/paging.js';
+import { parsePaging, pageFromRows } from '../utils/paging.js';
 
 const studentInclude = {
   class: { select: { id: true, name: true, numeric: true } },
@@ -40,17 +40,14 @@ export const listStudents = asyncHandler(async (req, res) => {
     ];
   }
   const { page, limit, skip } = parsePaging(req);
-  const [items, total] = await Promise.all([
-    prisma.student.findMany({
-      where,
-      select: studentListSelect,
-      orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
-      skip,
-      take: limit,
-    }),
-    prisma.student.count({ where }),
-  ]);
-  res.json(pageResult(toApi(items), total, page, limit));
+  const items = await prisma.student.findMany({
+    where,
+    select: studentListSelect,
+    orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
+    skip,
+    take: limit,
+  });
+  res.json(pageFromRows(toApi(items), page, limit, skip));
 });
 
 export const getStudent = asyncHandler(async (req, res) => {

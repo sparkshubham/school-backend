@@ -17,3 +17,15 @@ export function pageResult(items, total, page, limit) {
     limit,
   };
 }
+
+export function pageFromRows(items, page, limit, skip) {
+  const hasMore = items.length === limit;
+  return {
+    items,
+    page,
+    limit,
+    hasMore,
+    total: skip + items.length + (hasMore ? 1 : 0),
+    pages: hasMore ? page + 1 : Math.max(1, page),
+  };
+}
