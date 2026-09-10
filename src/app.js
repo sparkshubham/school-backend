@@ -49,6 +49,7 @@ export function createApp() {
   };
 
   app.get('/', health);
+  app.get('/api', health);
   app.get('/api/health', health);
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1', apiRoutes);
