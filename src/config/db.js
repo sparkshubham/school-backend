@@ -6,12 +6,37 @@ if (!process.env.VERCEL) {
   dns.setDefaultResultOrder('verbatim');
 }
 
+function runtimeDatabaseUrl() {
+  const raw = process.env.DATABASE_URL;
+  if (!raw) return raw;
+  try {
+    const u = new URL(raw);
+    if (u.hostname.includes('pooler.supabase.com')) {
+      u.searchParams.set('pool_timeout', '20');
+      if (!u.searchParams.get('sslmode')) u.searchParams.set('sslmode', 'require');
+      if (process.env.VERCEL) {
+        // Session mode (5432) caps at ~15 clients and fails on Vercel.
+        // Transaction mode (6543) multiplexes many serverless functions.
+        u.port = '6543';
+        u.searchParams.set('pgbouncer', 'true');
+        u.searchParams.set('connection_limit', '1');
+      } else if (!u.searchParams.get('connection_limit')) {
+        u.searchParams.set('connection_limit', '3');
+      }
+    }
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
 const globalForPrisma = globalThis;
 
 export const prisma =
   globalForPrisma.prisma ||
   new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
+    datasources: { db: { url: runtimeDatabaseUrl() } },
   });
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
