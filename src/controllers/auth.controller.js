@@ -4,10 +4,11 @@ import { signAccessToken, signRefreshToken, verifyRefresh, publicUser } from '..
 import { comparePassword } from '../utils/password.js';
 import { toApi } from '../utils/serialize.js';
 
+const crossSite = Boolean(process.env.VERCEL);
 const cookieOpts = {
   httpOnly: true,
-  sameSite: 'lax',
-  secure: process.env.NODE_ENV === 'production',
+  sameSite: crossSite ? 'none' : 'lax',
+  secure: crossSite || process.env.NODE_ENV === 'production',
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 

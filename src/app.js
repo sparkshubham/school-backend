@@ -13,8 +13,15 @@ import { prisma } from './config/db.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function corsOrigins() {
-  const raw = process.env.CLIENT_URL || 'http://localhost:5173';
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  const defaults = [
+    'http://localhost:5173',
+    'https://school-front-omega.vercel.app',
+  ];
+  const extra = (process.env.CLIENT_URL || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return [...new Set([...defaults, ...extra])];
 }
 
 export function createApp() {
@@ -25,7 +32,7 @@ export function createApp() {
       origin: (origin, cb) => {
         const allowed = corsOrigins();
         if (!origin || allowed.includes('*') || allowed.includes(origin)) return cb(null, true);
-        return cb(null, true);
+        return cb(new Error(`CORS blocked: ${origin}`), false);
       },
       credentials: true,
     })
