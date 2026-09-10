@@ -1,5 +1,4 @@
-import { createApp } from '../src/app.js';
+import '../src/loadEnv.js';
 
-const app = createApp();
-
-export default app;
+const { createApp } = await import('../src/app.js');
+export default createApp();
