@@ -4,6 +4,7 @@ import { asyncHandler, AppError } from '../utils/errors.js';
 import { signAccessToken, signRefreshToken, publicUser, authPayload } from '../utils/tokens.js';
 import { hashPassword } from '../utils/password.js';
 import { flattenInput, toApi, tenantWhere } from '../utils/serialize.js';
+import { parsePaging, pageResult } from '../utils/paging.js';
 
 export const listSchools = asyncHandler(async (req, res) => {
   const q = (req.query.q || '').trim();
@@ -17,8 +18,32 @@ export const listSchools = asyncHandler(async (req, res) => {
   }
   if (req.query.status) where.status = req.query.status;
   if (req.query.plan) where.plan = req.query.plan;
-  const items = await prisma.tenant.findMany({ where, orderBy: { createdAt: 'desc' } });
-  res.json({ items: toApi(items), total: items.length, plans: PLANS });
+  const { page, limit, skip } = parsePaging(req);
+  const [items, total, statusRows] = await Promise.all([
+    prisma.tenant.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        city: true,
+        plan: true,
+        status: true,
+        createdAt: true,
+      },
+    }),
+    prisma.tenant.count({ where }),
+    prisma.tenant.groupBy({ by: ['status'], _count: { _all: true } }),
+  ]);
+  const counts = { total: 0, active: 0, trial: 0, expired: 0, suspended: 0 };
+  for (const row of statusRows) {
+    counts[row.status] = row._count?._all ?? 0;
+    counts.total += counts[row.status];
+  }
+  res.json({ ...pageResult(toApi(items), total, page, limit), counts, plans: PLANS });
 });
 
 export const createSchool = asyncHandler(async (req, res) => {
@@ -99,31 +124,74 @@ export const loginAsAdmin = asyncHandler(async (req, res) => {
 
 export const getMeta = asyncHandler(async (req, res) => {
   const where = tenantWhere(req, {});
-  const [classes, sections, subjects, periods, sessions, teachers] = await Promise.all([
-    prisma.schoolClass.findMany({ where, orderBy: [{ order: 'asc' }, { numeric: 'asc' }] }),
+  const requested = new Set(
+    String(req.query.keys || 'classes,sections,periods,sessions')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+  const jobs = [];
+  const keys = [];
+  const add = (key, promise) => {
+    if (!requested.has(key)) return;
+    keys.push(key);
+    jobs.push(promise);
+  };
+  add(
+    'classes',
+    prisma.schoolClass.findMany({
+      where,
+      orderBy: [{ order: 'asc' }, { numeric: 'asc' }],
+      select: { id: true, name: true, numeric: true },
+    })
+  );
+  add(
+    'sections',
     prisma.section.findMany({
       where,
       include: { class: { select: { id: true, name: true } } },
       orderBy: { name: 'asc' },
-    }),
-    prisma.subject.findMany({ where, orderBy: { name: 'asc' } }),
-    prisma.period.findMany({ where, orderBy: { order: 'asc' } }),
-    prisma.academicSession.findMany({ where, orderBy: { createdAt: 'desc' } }),
+    })
+  );
+  add(
+    'subjects',
+    prisma.subject.findMany({
+      where,
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, code: true },
+    })
+  );
+  add(
+    'periods',
+    prisma.period.findMany({
+      where,
+      orderBy: { order: 'asc' },
+      select: { id: true, name: true, order: true, startTime: true, endTime: true, isBreak: true },
+    })
+  );
+  add(
+    'sessions',
+    prisma.academicSession.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, name: true, isCurrent: true, startDate: true, endDate: true },
+    })
+  );
+  add(
+    'teachers',
     prisma.teacher.findMany({
       where,
       select: { id: true, name: true, employeeId: true, status: true },
       orderBy: { name: 'asc' },
-      take: 200,
-    }),
-  ]);
-  res.json({
-    classes: toApi(classes),
-    sections: toApi(sections),
-    subjects: toApi(subjects),
-    periods: toApi(periods),
-    sessions: toApi(sessions),
-    teachers: toApi(teachers),
+      take: 100,
+    })
+  );
+  const values = jobs.length ? await Promise.all(jobs) : [];
+  const out = { classes: [], sections: [], subjects: [], periods: [], sessions: [], teachers: [] };
+  keys.forEach((key, i) => {
+    out[key] = toApi(values[i]);
   });
+  res.json(out);
 });
 
 export const getProfile = asyncHandler(async (req, res) => {

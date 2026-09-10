@@ -1,6 +1,7 @@
 import { prisma } from '../config/db.js';
 import { tenantWhere, toApi, dateOnly } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
+import { parsePaging, pageResult } from '../utils/paging.js';
 
 export const getSheet = asyncHandler(async (req, res) => {
   const { classId, sectionId, date } = req.query;
@@ -12,6 +13,7 @@ export const getSheet = asyncHandler(async (req, res) => {
       where: studentWhere,
       orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
       select: { id: true, firstName: true, lastName: true, rollNo: true, admissionNo: true },
+      take: 80,
     }),
     prisma.attendanceSheet.findFirst({
       where: tenantWhere(req, { classId, ...(sectionId ? { sectionId } : {}), date: day }),
@@ -110,12 +112,19 @@ export const reports = asyncHandler(async (req, res) => {
       })
     : [];
 
-  const rows = students.map((s) => {
-    const stats = byStudent[String(s.id)];
-    const pct = stats.total
-      ? Math.round(((stats.present + stats.late + stats.half_day * 0.5) / stats.total) * 1000) / 10
-      : 0;
-    return { student: toApi(s), ...stats, percentage: pct, low: pct < 75 };
+  const rows = students
+    .map((s) => {
+      const stats = byStudent[String(s.id)];
+      const pct = stats.total
+        ? Math.round(((stats.present + stats.late + stats.half_day * 0.5) / stats.total) * 1000) / 10
+        : 0;
+      return { student: toApi(s), ...stats, percentage: pct, low: pct < 75 };
+    })
+    .sort((a, b) => a.percentage - b.percentage);
+  const { page, limit, skip } = parsePaging(req);
+  res.json({
+    sheets: grouped.length,
+    ...pageResult(rows.slice(skip, skip + limit), rows.length, page, limit),
+    rows: rows.slice(skip, skip + limit),
   });
-  res.json({ sheets: grouped.length, rows: rows.sort((a, b) => a.percentage - b.percentage) });
 });

@@ -51,6 +51,9 @@ export function authPayload(user, school = null) {
     tenantStatus: school?.status || null,
     plan: school?.plan || null,
     modules: school?.modules || null,
+    schoolName: school?.name || null,
+    schoolLogo: school?.logo || null,
+    schoolCity: school?.city || null,
   };
 }
 

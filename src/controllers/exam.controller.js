@@ -1,6 +1,7 @@
 import { prisma } from '../config/db.js';
 import { tenantWhere, flattenInput, toApi } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
+import { parsePaging, pageResult } from '../utils/paging.js';
 
 function gradeFor(pct) {
   if (pct >= 90) return 'A+';
@@ -13,11 +14,19 @@ function gradeFor(pct) {
 }
 
 export const listExams = asyncHandler(async (req, res) => {
-  const items = await prisma.exam.findMany({
-    where: tenantWhere(req, {}),
-    orderBy: { startDate: 'desc' },
-  });
-  res.json({ items: toApi(items) });
+  const where = tenantWhere(req, {});
+  const { page, limit, skip } = parsePaging(req);
+  const [items, total] = await Promise.all([
+    prisma.exam.findMany({
+      where,
+      orderBy: { startDate: 'desc' },
+      skip,
+      take: limit,
+      select: { id: true, name: true, type: true, status: true, startDate: true, endDate: true },
+    }),
+    prisma.exam.count({ where }),
+  ]);
+  res.json(pageResult(toApi(items), total, page, limit));
 });
 
 export const createExam = asyncHandler(async (req, res) => {
@@ -93,7 +102,7 @@ export const results = asyncHandler(async (req, res) => {
   });
   const marks = await prisma.mark.findMany({
     where: { examId },
-    include: { student: true },
+    include: { student: { select: { id: true, firstName: true, lastName: true, rollNo: true } } },
   });
   const byStudent = {};
   marks.forEach((m) => {
@@ -124,7 +133,13 @@ export const results = asyncHandler(async (req, res) => {
     })
     .sort((a, b) => b.percentage - a.percentage)
     .map((r, i) => ({ ...r, rank: i + 1 }));
-  res.json({ exam: toApi(exam), subjects: toApi(subjects), rows });
+  const { page, limit, skip } = parsePaging(req);
+  res.json({
+    exam: toApi(exam),
+    subjects: toApi(subjects),
+    ...pageResult(rows.slice(skip, skip + limit), rows.length, page, limit),
+    rows: rows.slice(skip, skip + limit),
+  });
 });
 
 export const studentResult = asyncHandler(async (req, res) => {

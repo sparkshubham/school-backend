@@ -61,8 +61,8 @@ r.post('/teachers', teachers.createTeacher);
 r.post('/teachers/:id/login', teachers.createOrResetLogin);
 
 const crudMounts = [
-  ['/teachers', 'teacher', { include: { user: { omit: { password: true } } }, searchFields: ['name', 'employeeId', 'email'] }],
-  ['/parents', 'parent', { include: { students: true, user: { omit: { password: true } } }, searchFields: ['name', 'email', 'phone'] }],
+  ['/teachers', 'teacher', { include: { user: { select: { id: true, email: true } } }, searchFields: ['name', 'employeeId', 'email'] }],
+  ['/parents', 'parent', { include: { students: { select: { id: true, firstName: true, lastName: true } }, user: { select: { id: true, email: true } } }, searchFields: ['name', 'email', 'phone'] }],
   ['/classes', 'schoolClass', { searchFields: ['name'] }],
   ['/sections', 'section', { include: { class: true }, searchFields: ['name'] }],
   ['/subjects', 'subject', { searchFields: ['name', 'code'] }],
@@ -71,14 +71,14 @@ const crudMounts = [
   ['/branches', 'branch', { searchFields: ['name', 'code'] }],
   ['/periods', 'period', { searchFields: ['name'] }],
   ['/timetable', 'timetableSlot', { include: { class: true, section: true, period: true, subject: true, teacher: true } }],
-  ['/homework', 'homework', { include: { class: true, section: true, subject: true, teacher: true }, searchFields: ['title'] }],
+  ['/homework', 'homework', { include: { class: { select: { id: true, name: true } }, section: { select: { id: true, name: true } }, subject: { select: { id: true, name: true } }, teacher: { select: { id: true, name: true } } }, searchFields: ['title'] }],
   ['/notices', 'notice', { searchFields: ['title', 'body'] }],
   ['/events', 'calendarEvent', { searchFields: ['title'] }],
   ['/enquiries', 'enquiry', { searchFields: ['studentName', 'parentName', 'phone'] }],
   ['/leaves', 'leaveRequest', { include: { user: { omit: { password: true } } }, searchFields: ['reason'] }],
   ['/complaints', 'complaint', { searchFields: ['title', 'body'] }],
   ['/books', 'book', { searchFields: ['name', 'author', 'isbn'] }],
-  ['/book-issues', 'bookIssue', { include: { book: true, student: true } }],
+  ['/book-issues', 'bookIssue', { include: { book: { select: { id: true, name: true } }, student: { select: { id: true, firstName: true, lastName: true } } } }],
   ['/vehicles', 'vehicle', { searchFields: ['number', 'driverName'] }],
   ['/routes', 'transportRoute', { include: { vehicle: true, stops: { orderBy: { order: 'asc' } } }, searchFields: ['name'] }],
   ['/student-transport', 'studentTransport', { include: { student: true, route: true } }],

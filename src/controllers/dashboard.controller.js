@@ -86,7 +86,6 @@ export const schoolDashboard = asyncHandler(async (req, res) => {
     events,
     notices,
     enquiries,
-    homework,
     birthdays,
   ] = await Promise.all([
     prisma.student.count({ where: { tenantId: tid, status: 'active' } }),
@@ -134,18 +133,6 @@ export const schoolDashboard = asyncHandler(async (req, res) => {
       take: 6,
       select: { id: true, studentName: true, classApplying: true, status: true },
     }),
-    prisma.homework.findMany({
-      where: { tenantId: tid },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-      select: {
-        id: true,
-        title: true,
-        dueDate: true,
-        subject: { select: { id: true, name: true } },
-        class: { select: { id: true, name: true } },
-      },
-    }),
     prisma.$queryRaw`
       SELECT id, "firstName", "lastName", dob
       FROM students
@@ -177,7 +164,6 @@ export const schoolDashboard = asyncHandler(async (req, res) => {
     events: toApi(events),
     notices: toApi(notices),
     enquiries: toApi(enquiries),
-    homework: toApi(homework),
     birthdays: toApi(birthdays),
   });
 });

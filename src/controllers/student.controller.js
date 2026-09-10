@@ -2,6 +2,7 @@ import { prisma } from '../config/db.js';
 import { tenantWhere, flattenInput, toApi } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
 import { hashPassword } from '../utils/password.js';
+import { parsePaging, pageResult } from '../utils/paging.js';
 
 const studentInclude = {
   class: { select: { id: true, name: true, numeric: true } },
@@ -38,19 +39,18 @@ export const listStudents = asyncHandler(async (req, res) => {
       { rollNo: { contains: q, mode: 'insensitive' } },
     ];
   }
-  const page = Math.max(1, Number(req.query.page) || 1);
-  const limit = Math.min(100, Number(req.query.limit) || 50);
+  const { page, limit, skip } = parsePaging(req);
   const [items, total] = await Promise.all([
     prisma.student.findMany({
       where,
       select: studentListSelect,
       orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
-      skip: (page - 1) * limit,
+      skip,
       take: limit,
     }),
     prisma.student.count({ where }),
   ]);
-  res.json({ items: toApi(items), total, page, pages: Math.ceil(total / limit) });
+  res.json(pageResult(toApi(items), total, page, limit));
 });
 
 export const getStudent = asyncHandler(async (req, res) => {
