@@ -9,20 +9,6 @@ import * as fees from '../controllers/fee.controller.js';
 import * as exams from '../controllers/exam.controller.js';
 import * as teachers from '../controllers/teacher.controller.js';
 import { createCrud, mountCrud } from '../utils/crud.js';
-import { Teacher } from '../models/Teacher.js';
-import { Parent } from '../models/Parent.js';
-import { SchoolClass } from '../models/SchoolClass.js';
-import { Section } from '../models/Section.js';
-import { Subject } from '../models/Subject.js';
-import { ClassSubject } from '../models/ClassSubject.js';
-import { AcademicSession } from '../models/AcademicSession.js';
-import { Branch } from '../models/Branch.js';
-import { Period, TimetableSlot } from '../models/Timetable.js';
-import { Homework } from '../models/Homework.js';
-import { Notice, Event, Enquiry, LeaveRequest, Complaint } from '../models/Ops.js';
-import { Book, BookIssue } from '../models/Library.js';
-import { Vehicle, TransportRoute, StudentTransport } from '../models/Transport.js';
-import { User } from '../models/User.js';
 
 const r = Router();
 r.use(requireAuth, attachTenant);
@@ -74,33 +60,33 @@ r.post('/teachers', teachers.createTeacher);
 r.post('/teachers/:id/login', teachers.createOrResetLogin);
 
 const crudMounts = [
-  ['/teachers', Teacher, { populate: ['userId'], searchFields: ['name', 'employeeId', 'email'] }],
-  ['/parents', Parent, { populate: ['students', 'userId'], searchFields: ['name', 'email', 'phone'] }],
-  ['/classes', SchoolClass, { searchFields: ['name'] }],
-  ['/sections', Section, { populate: ['classId'], searchFields: ['name'] }],
-  ['/subjects', Subject, { searchFields: ['name', 'code'] }],
-  ['/class-subjects', ClassSubject, { populate: ['classId', 'sectionId', 'subjectId', 'teacherId'] }],
-  ['/sessions', AcademicSession, { searchFields: ['name'] }],
-  ['/branches', Branch, { searchFields: ['name', 'code'] }],
-  ['/periods', Period, { searchFields: ['name'] }],
-  ['/timetable', TimetableSlot, { populate: ['classId', 'sectionId', 'periodId', 'subjectId', 'teacherId'] }],
-  ['/homework', Homework, { populate: ['classId', 'sectionId', 'subjectId', 'teacherId'], searchFields: ['title'] }],
-  ['/notices', Notice, { searchFields: ['title', 'body'] }],
-  ['/events', Event, { searchFields: ['title'] }],
-  ['/enquiries', Enquiry, { searchFields: ['studentName', 'parentName', 'phone'] }],
-  ['/leaves', LeaveRequest, { populate: ['userId'], searchFields: ['reason'] }],
-  ['/complaints', Complaint, { searchFields: ['title', 'body'] }],
-  ['/books', Book, { searchFields: ['name', 'author', 'isbn'] }],
-  ['/book-issues', BookIssue, { populate: ['bookId', 'studentId'] }],
-  ['/vehicles', Vehicle, { searchFields: ['number', 'driverName'] }],
-  ['/routes', TransportRoute, { populate: ['vehicleId'], searchFields: ['name'] }],
-  ['/student-transport', StudentTransport, { populate: ['studentId', 'routeId'] }],
-  ['/users', User, { searchFields: ['name', 'email'] }],
+  ['/teachers', 'teacher', { include: { user: { omit: { password: true } } }, searchFields: ['name', 'employeeId', 'email'] }],
+  ['/parents', 'parent', { include: { students: true, user: { omit: { password: true } } }, searchFields: ['name', 'email', 'phone'] }],
+  ['/classes', 'schoolClass', { searchFields: ['name'] }],
+  ['/sections', 'section', { include: { class: true }, searchFields: ['name'] }],
+  ['/subjects', 'subject', { searchFields: ['name', 'code'] }],
+  ['/class-subjects', 'classSubject', { include: { class: true, section: true, subject: true, teacher: true } }],
+  ['/sessions', 'academicSession', { searchFields: ['name'] }],
+  ['/branches', 'branch', { searchFields: ['name', 'code'] }],
+  ['/periods', 'period', { searchFields: ['name'] }],
+  ['/timetable', 'timetableSlot', { include: { class: true, section: true, period: true, subject: true, teacher: true } }],
+  ['/homework', 'homework', { include: { class: true, section: true, subject: true, teacher: true }, searchFields: ['title'] }],
+  ['/notices', 'notice', { searchFields: ['title', 'body'] }],
+  ['/events', 'calendarEvent', { searchFields: ['title'] }],
+  ['/enquiries', 'enquiry', { searchFields: ['studentName', 'parentName', 'phone'] }],
+  ['/leaves', 'leaveRequest', { include: { user: { omit: { password: true } } }, searchFields: ['reason'] }],
+  ['/complaints', 'complaint', { searchFields: ['title', 'body'] }],
+  ['/books', 'book', { searchFields: ['name', 'author', 'isbn'] }],
+  ['/book-issues', 'bookIssue', { include: { book: true, student: true } }],
+  ['/vehicles', 'vehicle', { searchFields: ['number', 'driverName'] }],
+  ['/routes', 'transportRoute', { include: { vehicle: true, stops: { orderBy: { order: 'asc' } } }, searchFields: ['name'] }],
+  ['/student-transport', 'studentTransport', { include: { student: true, route: true } }],
+  ['/users', 'user', { searchFields: ['name', 'email'] }],
 ];
 
-for (const [path, Model, options] of crudMounts) {
+for (const [path, model, options] of crudMounts) {
   const sub = Router();
-  mountCrud(sub, createCrud(Model, options));
+  mountCrud(sub, createCrud(model, options));
   r.use(path, sub);
 }
 

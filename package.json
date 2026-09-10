@@ -6,9 +6,14 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "seed": "node src/seed/index.js",
-    "seed:vbm": "node src/seed/vidhya-bharti.js"
+    "seed:vbm": "node src/seed/vidhya-bharti.js",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@prisma/client": "^6.16.2",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -17,8 +22,10 @@
     "express-validator": "^7.2.1",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.9.5",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.16.2"
   }
 }

@@ -1,7 +1,8 @@
-import { User } from '../models/User.js';
-import { Tenant } from '../models/Tenant.js';
+import { prisma } from '../config/db.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
 import { signAccessToken, signRefreshToken, verifyRefresh, publicUser } from '../utils/tokens.js';
+import { comparePassword } from '../utils/password.js';
+import { toApi } from '../utils/serialize.js';
 
 const cookieOpts = {
   httpOnly: true,
@@ -11,26 +12,31 @@ const cookieOpts = {
 };
 
 function issueTokens(user, res) {
-  const payload = { sub: String(user._id), role: user.role, tenantId: user.tenantId || null };
+  const apiUser = toApi(user);
+  const payload = { sub: String(apiUser._id), role: apiUser.role, tenantId: apiUser.tenantId || null };
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
   res.cookie('refreshToken', refreshToken, cookieOpts);
-  return { accessToken, refreshToken, user: publicUser(user) };
+  return { accessToken, refreshToken, user: publicUser(apiUser) };
 }
 
 export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) throw new AppError('Email and password are required');
-  const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
-  if (!user || !(await user.comparePassword(password))) {
+  const user = await prisma.user.findFirst({
+    where: { email: email.toLowerCase().trim() },
+  });
+  if (!user || !(await comparePassword(password, user.password))) {
     throw new AppError('Invalid email or password', 401);
   }
   if (user.status !== 'active') throw new AppError('Account is inactive', 403);
-  user.lastLogin = new Date();
-  await user.save();
-  const tokens = issueTokens(user, res);
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLogin: new Date() },
+  });
+  const tokens = issueTokens(updated, res);
   let school = null;
-  if (user.tenantId) school = await Tenant.findById(user.tenantId);
+  if (updated.tenantId) school = toApi(await prisma.tenant.findUnique({ where: { id: updated.tenantId } }));
   res.json({ ...tokens, school });
 });
 
@@ -43,14 +49,14 @@ export const refresh = asyncHandler(async (req, res) => {
   } catch {
     throw new AppError('Invalid refresh token', 401);
   }
-  const user = await User.findById(decoded.sub);
+  const user = await prisma.user.findUnique({ where: { id: decoded.sub } });
   if (!user || user.status !== 'active') throw new AppError('Account is not active', 401);
   res.json(issueTokens(user, res));
 });
 
 export const me = asyncHandler(async (req, res) => {
   let school = null;
-  if (req.tenantId) school = await Tenant.findById(req.tenantId);
+  if (req.tenantId) school = toApi(await prisma.tenant.findUnique({ where: { id: req.tenantId } }));
   res.json({ user: publicUser(req.user), school });
 });
 

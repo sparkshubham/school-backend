@@ -1,18 +1,24 @@
-import { Tenant } from '../models/Tenant.js';
-import { User } from '../models/User.js';
-import { Branch } from '../models/Branch.js';
+import { prisma } from '../config/db.js';
 import { PLANS } from '../config/constants.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
 import { signAccessToken, signRefreshToken, publicUser } from '../utils/tokens.js';
+import { hashPassword } from '../utils/password.js';
+import { flattenInput, toApi } from '../utils/serialize.js';
 
 export const listSchools = asyncHandler(async (req, res) => {
   const q = (req.query.q || '').trim();
-  const filter = {};
-  if (q) filter.$or = [{ name: new RegExp(q, 'i') }, { city: new RegExp(q, 'i') }, { email: new RegExp(q, 'i') }];
-  if (req.query.status) filter.status = req.query.status;
-  if (req.query.plan) filter.plan = req.query.plan;
-  const items = await Tenant.find(filter).sort({ createdAt: -1 });
-  res.json({ items, total: items.length, plans: PLANS });
+  const where = {};
+  if (q) {
+    where.OR = [
+      { name: { contains: q, mode: 'insensitive' } },
+      { city: { contains: q, mode: 'insensitive' } },
+      { email: { contains: q, mode: 'insensitive' } },
+    ];
+  }
+  if (req.query.status) where.status = req.query.status;
+  if (req.query.plan) where.plan = req.query.plan;
+  const items = await prisma.tenant.findMany({ where, orderBy: { createdAt: 'desc' } });
+  res.json({ items: toApi(items), total: items.length, plans: PLANS });
 });
 
 export const createSchool = asyncHandler(async (req, res) => {
@@ -26,65 +32,80 @@ export const createSchool = asyncHandler(async (req, res) => {
     d.setDate(d.getDate() + 14);
     body.trialEndsAt = d;
   }
-  const school = await Tenant.create(body);
-  await Branch.create({
-    tenantId: school._id,
-    name: 'Main Branch',
-    code: 'MAIN',
-    isMain: true,
-    address: body.address,
-    phone: body.phone,
+  const data = flattenInput(body);
+  const school = await prisma.tenant.create({ data });
+  await prisma.branch.create({
+    data: {
+      tenantId: school.id,
+      name: 'Main Branch',
+      code: 'MAIN',
+      isMain: true,
+      address: body.address || null,
+      phone: body.phone || null,
+    },
   });
   if (body.adminEmail && body.adminPassword) {
-    await User.create({
-      tenantId: school._id,
-      name: body.adminName || `${body.name} Admin`,
-      email: body.adminEmail,
-      password: body.adminPassword,
-      phone: body.phone,
-      role: 'school_admin',
+    await prisma.user.create({
+      data: {
+        tenantId: school.id,
+        name: body.adminName || `${body.name} Admin`,
+        email: String(body.adminEmail).toLowerCase().trim(),
+        password: await hashPassword(body.adminPassword),
+        phone: body.phone || null,
+        role: 'school_admin',
+      },
     });
   }
-  res.status(201).json(school);
+  res.status(201).json(toApi(school));
 });
 
 export const getSchool = asyncHandler(async (req, res) => {
-  const school = await Tenant.findById(req.params.id);
+  const school = await prisma.tenant.findUnique({ where: { id: req.params.id } });
   if (!school) throw new AppError('School not found', 404);
   const [admins, branches] = await Promise.all([
-    User.find({ tenantId: school._id, role: 'school_admin' }).select('-password'),
-    Branch.find({ tenantId: school._id }),
+    prisma.user.findMany({
+      where: { tenantId: school.id, role: 'school_admin' },
+      omit: { password: true },
+    }),
+    prisma.branch.findMany({ where: { tenantId: school.id } }),
   ]);
-  res.json({ school, admins, branches, plans: PLANS });
+  res.json({ school: toApi(school), admins: toApi(admins), branches: toApi(branches), plans: PLANS });
 });
 
 export const updateSchool = asyncHandler(async (req, res) => {
-  const body = { ...req.body };
-  if (body.plan && !body.modules) body.modules = PLANS[body.plan]?.modules;
-  const school = await Tenant.findByIdAndUpdate(req.params.id, body, { new: true });
-  if (!school) throw new AppError('School not found', 404);
-  res.json(school);
+  const body = flattenInput(req.body);
+  if (req.body.plan && !req.body.modules) body.modules = PLANS[req.body.plan]?.modules;
+  const existing = await prisma.tenant.findUnique({ where: { id: req.params.id } });
+  if (!existing) throw new AppError('School not found', 404);
+  const school = await prisma.tenant.update({ where: { id: req.params.id }, data: body });
+  res.json(toApi(school));
 });
 
 export const loginAsAdmin = asyncHandler(async (req, res) => {
-  const admin = await User.findOne({ tenantId: req.params.id, role: 'school_admin', status: 'active' });
+  const admin = await prisma.user.findFirst({
+    where: { tenantId: req.params.id, role: 'school_admin', status: 'active' },
+  });
   if (!admin) throw new AppError('No school admin found', 404);
-  const payload = { sub: String(admin._id), role: admin.role, tenantId: admin.tenantId };
+  const apiUser = toApi(admin);
+  const payload = { sub: String(apiUser._id), role: apiUser.role, tenantId: apiUser.tenantId };
   res.json({
     accessToken: signAccessToken(payload),
     refreshToken: signRefreshToken(payload),
-    user: publicUser(admin),
-    school: await Tenant.findById(admin.tenantId),
+    user: publicUser(apiUser),
+    school: toApi(await prisma.tenant.findUnique({ where: { id: admin.tenantId } })),
   });
 });
 
 export const getProfile = asyncHandler(async (req, res) => {
-  const school = await Tenant.findById(req.tenantId);
-  const branches = await Branch.find({ tenantId: req.tenantId });
-  res.json({ school, branches });
+  const school = await prisma.tenant.findUnique({ where: { id: req.tenantId } });
+  const branches = await prisma.branch.findMany({ where: { tenantId: req.tenantId } });
+  res.json({ school: toApi(school), branches: toApi(branches) });
 });
 
 export const updateProfile = asyncHandler(async (req, res) => {
-  const school = await Tenant.findByIdAndUpdate(req.tenantId, req.body, { new: true });
-  res.json(school);
+  const school = await prisma.tenant.update({
+    where: { id: req.tenantId },
+    data: flattenInput(req.body),
+  });
+  res.json(toApi(school));
 });

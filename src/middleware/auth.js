@@ -1,6 +1,7 @@
-import { User } from '../models/User.js';
+import { prisma } from '../config/db.js';
 import { AppError } from '../utils/errors.js';
 import { verifyAccess } from '../utils/tokens.js';
+import { toApi } from '../utils/serialize.js';
 
 export async function requireAuth(req, res, next) {
   try {
@@ -8,9 +9,12 @@ export async function requireAuth(req, res, next) {
     const token = header.startsWith('Bearer ') ? header.slice(7) : req.cookies?.accessToken;
     if (!token) throw new AppError('Authentication required', 401);
     const decoded = verifyAccess(token);
-    const user = await User.findById(decoded.sub).select('-password');
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.sub },
+      omit: { password: true },
+    });
     if (!user || user.status !== 'active') throw new AppError('Account is not active', 401);
-    req.user = user;
+    req.user = toApi(user);
     req.tenantId = user.tenantId || null;
     next();
   } catch (err) {

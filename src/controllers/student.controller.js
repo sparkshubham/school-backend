@@ -1,111 +1,134 @@
-import { Student } from '../models/Student.js';
-import { User } from '../models/User.js';
-import { Parent } from '../models/Parent.js';
-import { tenantScope } from '../middleware/auth.js';
+import { prisma } from '../config/db.js';
+import { tenantWhere, flattenInput, toApi } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
+import { hashPassword } from '../utils/password.js';
 
-const populate = [
-  { path: 'classId', select: 'name numeric' },
-  { path: 'sectionId', select: 'name' },
-  { path: 'sessionId', select: 'name' },
-  { path: 'parentId' },
-];
+const studentInclude = {
+  class: { select: { id: true, name: true, numeric: true } },
+  section: { select: { id: true, name: true } },
+  session: { select: { id: true, name: true } },
+  parent: true,
+};
 
 export const listStudents = asyncHandler(async (req, res) => {
-  const filter = tenantScope({ status: req.query.status || { $ne: 'deleted' } }, req);
-  if (req.query.classId) filter.classId = req.query.classId;
-  if (req.query.sectionId) filter.sectionId = req.query.sectionId;
+  const where = tenantWhere(req, {});
+  if (req.query.status) where.status = req.query.status;
+  if (req.query.classId) where.classId = req.query.classId;
+  if (req.query.sectionId) where.sectionId = req.query.sectionId;
   const q = (req.query.q || '').trim();
   if (q) {
-    filter.$or = [
-      { firstName: new RegExp(q, 'i') },
-      { lastName: new RegExp(q, 'i') },
-      { admissionNo: new RegExp(q, 'i') },
-      { rollNo: new RegExp(q, 'i') },
+    where.OR = [
+      { firstName: { contains: q, mode: 'insensitive' } },
+      { lastName: { contains: q, mode: 'insensitive' } },
+      { admissionNo: { contains: q, mode: 'insensitive' } },
+      { rollNo: { contains: q, mode: 'insensitive' } },
     ];
   }
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(100, Number(req.query.limit) || 50);
   const [items, total] = await Promise.all([
-    Student.find(filter)
-      .populate(populate)
-      .sort({ rollNo: 1, firstName: 1 })
-      .skip((page - 1) * limit)
-      .limit(limit),
-    Student.countDocuments(filter),
+    prisma.student.findMany({
+      where,
+      include: studentInclude,
+      orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+    prisma.student.count({ where }),
   ]);
-  res.json({ items, total, page, pages: Math.ceil(total / limit) });
+  res.json({ items: toApi(items), total, page, pages: Math.ceil(total / limit) });
 });
 
 export const getStudent = asyncHandler(async (req, res) => {
-  const item = await Student.findOne(tenantScope({ _id: req.params.id }, req)).populate(populate);
+  const item = await prisma.student.findFirst({
+    where: tenantWhere(req, { id: req.params.id }),
+    include: studentInclude,
+  });
   if (!item) throw new AppError('Student not found', 404);
-  res.json(item);
+  res.json(toApi(item));
 });
 
 export const createStudent = asyncHandler(async (req, res) => {
-  const body = { ...req.body, tenantId: req.tenantId };
-  const student = await Student.create(body);
-  if (body.createLogin && body.email) {
-    const user = await User.create({
-      tenantId: req.tenantId,
-      name: `${body.firstName} ${body.lastName || ''}`.trim(),
-      email: body.email,
-      password: body.password || 'Student@123',
-      phone: body.phone,
-      role: 'student',
-      linkedStudentId: student._id,
+  const body = flattenInput({ ...req.body, tenantId: req.tenantId });
+  delete body.createLogin;
+  delete body.parentEmail;
+  delete body.parentName;
+  delete body.parentPassword;
+  delete body.parentPhone;
+  let student = await prisma.student.create({ data: body });
+
+  if (req.body.createLogin && req.body.email) {
+    const user = await prisma.user.create({
+      data: {
+        tenantId: req.tenantId,
+        name: `${req.body.firstName} ${req.body.lastName || ''}`.trim(),
+        email: String(req.body.email).toLowerCase().trim(),
+        password: await hashPassword(req.body.password || 'Student@123'),
+        phone: req.body.phone || null,
+        role: 'student',
+        linkedStudentId: student.id,
+      },
     });
-    student.userId = user._id;
-    await student.save();
+    student = await prisma.student.update({
+      where: { id: student.id },
+      data: { userId: user.id },
+    });
   }
-  if (body.parentEmail && body.parentName) {
-    let parent = await Parent.findOne({ tenantId: req.tenantId, email: body.parentEmail });
+
+  if (req.body.parentEmail && req.body.parentName) {
+    let parent = await prisma.parent.findFirst({
+      where: { tenantId: req.tenantId, email: req.body.parentEmail },
+    });
     if (!parent) {
-      const pUser = await User.create({
-        tenantId: req.tenantId,
-        name: body.parentName,
-        email: body.parentEmail,
-        password: body.parentPassword || 'Parent@123',
-        phone: body.fatherPhone || body.parentPhone,
-        role: 'parent',
+      const pUser = await prisma.user.create({
+        data: {
+          tenantId: req.tenantId,
+          name: req.body.parentName,
+          email: String(req.body.parentEmail).toLowerCase().trim(),
+          password: await hashPassword(req.body.parentPassword || 'Parent@123'),
+          phone: req.body.fatherPhone || req.body.parentPhone || null,
+          role: 'parent',
+        },
       });
-      parent = await Parent.create({
-        tenantId: req.tenantId,
-        userId: pUser._id,
-        name: body.parentName,
-        phone: body.fatherPhone,
-        email: body.parentEmail,
-        students: [student._id],
+      parent = await prisma.parent.create({
+        data: {
+          tenantId: req.tenantId,
+          userId: pUser.id,
+          name: req.body.parentName,
+          phone: req.body.fatherPhone || null,
+          email: req.body.parentEmail,
+        },
       });
-      pUser.linkedParentId = parent._id;
-      await pUser.save();
-    } else {
-      parent.students.push(student._id);
-      await parent.save();
+      await prisma.user.update({
+        where: { id: pUser.id },
+        data: { linkedParentId: parent.id },
+      });
     }
-    student.parentId = parent._id;
-    await student.save();
+    student = await prisma.student.update({
+      where: { id: student.id },
+      data: { parentId: parent.id },
+    });
   }
-  res.status(201).json(student);
+
+  res.status(201).json(toApi(student));
 });
 
 export const updateStudent = asyncHandler(async (req, res) => {
-  const item = await Student.findOneAndUpdate(
-    tenantScope({ _id: req.params.id }, req),
-    req.body,
-    { new: true, runValidators: true }
-  );
-  if (!item) throw new AppError('Student not found', 404);
-  res.json(item);
+  const existing = await prisma.student.findFirst({ where: tenantWhere(req, { id: req.params.id }) });
+  if (!existing) throw new AppError('Student not found', 404);
+  const item = await prisma.student.update({
+    where: { id: existing.id },
+    data: flattenInput(req.body),
+  });
+  res.json(toApi(item));
 });
 
 export const removeStudent = asyncHandler(async (req, res) => {
-  const item = await Student.findOneAndUpdate(
-    tenantScope({ _id: req.params.id }, req),
-    { status: 'inactive' },
-    { new: true }
-  );
-  if (!item) throw new AppError('Student not found', 404);
+  const existing = await prisma.student.findFirst({ where: tenantWhere(req, { id: req.params.id }) });
+  if (!existing) throw new AppError('Student not found', 404);
+  await prisma.student.update({
+    where: { id: existing.id },
+    data: { status: 'inactive' },
+  });
   res.json({ ok: true });
 });

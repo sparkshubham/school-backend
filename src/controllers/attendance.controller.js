@@ -1,56 +1,77 @@
-import { Attendance } from '../models/Attendance.js';
-import { Student } from '../models/Student.js';
-import { tenantScope } from '../middleware/auth.js';
+import { prisma } from '../config/db.js';
+import { tenantWhere, toApi, dateOnly } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
 
 export const getSheet = asyncHandler(async (req, res) => {
   const { classId, sectionId, date } = req.query;
   if (!classId || !date) throw new AppError('classId and date are required');
-  const day = new Date(date);
-  day.setHours(0, 0, 0, 0);
-  const next = new Date(day);
-  next.setDate(next.getDate() + 1);
-  const students = await Student.find(
-    tenantScope({ classId, ...(sectionId ? { sectionId } : {}), status: 'active' }, req)
-  ).sort({ rollNo: 1, firstName: 1 });
-  const existing = await Attendance.findOne(
-    tenantScope({ classId, ...(sectionId ? { sectionId } : {}), date: { $gte: day, $lt: next } }, req)
-  );
-  res.json({ students, attendance: existing });
+  const day = dateOnly(date);
+  const students = await prisma.student.findMany({
+    where: tenantWhere(req, { classId, ...(sectionId ? { sectionId } : {}), status: 'active' }),
+    orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
+  });
+  const existing = await prisma.attendanceSheet.findFirst({
+    where: tenantWhere(req, { classId, ...(sectionId ? { sectionId } : {}), date: day }),
+    include: { records: true },
+  });
+  res.json({ students: toApi(students), attendance: toApi(existing) });
 });
 
 export const saveSheet = asyncHandler(async (req, res) => {
   const { classId, sectionId, date, records } = req.body;
   if (!classId || !date || !records) throw new AppError('classId, date and records are required');
-  const day = new Date(date);
-  day.setHours(0, 0, 0, 0);
-  const next = new Date(day);
-  next.setDate(next.getDate() + 1);
-  const filter = tenantScope({ classId, date: { $gte: day, $lt: next } }, req);
+  const day = dateOnly(date);
+  const filter = tenantWhere(req, { classId, date: day });
   if (sectionId) filter.sectionId = sectionId;
-  const payload = {
-    tenantId: req.tenantId,
-    classId,
-    sectionId,
-    date: day,
-    takenBy: req.user._id,
-    records,
-  };
-  const item = await Attendance.findOneAndUpdate(filter, payload, { new: true, upsert: true, setDefaultsOnInsert: true });
-  res.json(item);
+  const existing = await prisma.attendanceSheet.findFirst({ where: filter });
+  const recordCreate = (records || []).map((r) => ({
+    studentId: r.studentId?._id || r.studentId,
+    status: r.status,
+  }));
+
+  let item;
+  if (existing) {
+    item = await prisma.attendanceSheet.update({
+      where: { id: existing.id },
+      data: {
+        takenBy: req.user._id,
+        records: {
+          deleteMany: {},
+          create: recordCreate,
+        },
+      },
+      include: { records: true },
+    });
+  } else {
+    item = await prisma.attendanceSheet.create({
+      data: {
+        tenantId: req.tenantId,
+        classId,
+        sectionId: sectionId || null,
+        date: day,
+        takenBy: req.user._id,
+        records: { create: recordCreate },
+      },
+      include: { records: true },
+    });
+  }
+  res.json(toApi(item));
 });
 
 export const reports = asyncHandler(async (req, res) => {
   const { classId, sectionId, from, to, studentId } = req.query;
-  const filter = tenantScope({}, req);
+  const filter = tenantWhere(req, {});
   if (classId) filter.classId = classId;
   if (sectionId) filter.sectionId = sectionId;
   if (from || to) {
     filter.date = {};
-    if (from) filter.date.$gte = new Date(from);
-    if (to) filter.date.$lte = new Date(to);
+    if (from) filter.date.gte = dateOnly(from);
+    if (to) filter.date.lte = dateOnly(to);
   }
-  const sheets = await Attendance.find(filter).populate('classId sectionId');
+  const sheets = await prisma.attendanceSheet.findMany({
+    where: filter,
+    include: { class: true, section: true, records: true },
+  });
   const byStudent = {};
   sheets.forEach((sheet) => {
     sheet.records.forEach((r) => {
@@ -62,11 +83,14 @@ export const reports = asyncHandler(async (req, res) => {
     });
   });
   const ids = Object.keys(byStudent);
-  const students = await Student.find({ _id: { $in: ids } }).populate('classId sectionId');
+  const students = await prisma.student.findMany({
+    where: { id: { in: ids } },
+    include: { class: true, section: true },
+  });
   const rows = students.map((s) => {
-    const stats = byStudent[String(s._id)];
+    const stats = byStudent[String(s.id)];
     const pct = stats.total ? Math.round(((stats.present + stats.late + stats.half_day * 0.5) / stats.total) * 1000) / 10 : 0;
-    return { student: s, ...stats, percentage: pct, low: pct < 75 };
+    return { student: toApi(s), ...stats, percentage: pct, low: pct < 75 };
   });
   res.json({ sheets: sheets.length, rows: rows.sort((a, b) => a.percentage - b.percentage) });
 });

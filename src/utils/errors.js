@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+
 export class AppError extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -10,10 +12,25 @@ export function asyncHandler(fn) {
 }
 
 export function errorHandler(err, req, res, next) {
-  const status = err.status || 500;
+  let status = err.status || 500;
+  let message = err.message || 'Server error';
+
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === 'P2002') {
+      status = 409;
+      message = 'A record with those unique details already exists';
+    } else if (err.code === 'P2025') {
+      status = 404;
+      message = 'Not found';
+    } else if (err.code === 'P2003') {
+      status = 400;
+      message = 'Related record was not found';
+    }
+  }
+
   if (status >= 500) console.error(err);
   res.status(status).json({
-    message: err.message || 'Server error',
+    message,
     ...(process.env.NODE_ENV !== 'production' && status >= 500 ? { stack: err.stack } : {}),
   });
 }
