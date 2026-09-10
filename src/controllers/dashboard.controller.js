@@ -12,37 +12,54 @@ function startOfMonth(d = new Date()) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
 
+function countByStatus(rows) {
+  const map = {};
+  for (const row of rows) map[row.status] = row._count?._all ?? row._count ?? 0;
+  return map;
+}
+
 export const superDashboard = asyncHandler(async (req, res) => {
-  const [schools, students, teachers, payments] = await Promise.all([
-    prisma.tenant.findMany(),
-    prisma.student.count(),
-    prisma.teacher.count(),
-    prisma.subscriptionPayment.findMany({ where: { status: 'paid' } }),
-  ]);
   const now = new Date();
-  const counts = {
-    totalSchools: schools.length,
-    active: schools.filter((s) => s.status === 'active').length,
-    trial: schools.filter((s) => s.status === 'trial').length,
-    expired: schools.filter((s) => s.status === 'expired').length,
+  const monthStart = startOfMonth(now);
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+
+  const [statusRows, students, teachers, monthly, annual, newSchools, pendingPayments, schools] =
+    await Promise.all([
+      prisma.tenant.groupBy({ by: ['status'], _count: { _all: true } }),
+      prisma.student.count(),
+      prisma.teacher.count(),
+      prisma.subscriptionPayment.aggregate({
+        where: { status: 'paid', paidAt: { gte: monthStart } },
+        _sum: { amount: true },
+      }),
+      prisma.subscriptionPayment.aggregate({
+        where: { status: 'paid', paidAt: { gte: yearStart } },
+        _sum: { amount: true },
+      }),
+      prisma.tenant.count({ where: { createdAt: { gte: monthStart } } }),
+      prisma.tenant.count({ where: { status: { in: ['trial', 'expired'] } } }),
+      prisma.tenant.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 8,
+        select: { id: true, name: true, city: true, plan: true, status: true, createdAt: true },
+      }),
+    ]);
+
+  const byStatus = countByStatus(statusRows);
+  const totalSchools = Object.values(byStatus).reduce((s, n) => s + n, 0);
+
+  res.json({
+    totalSchools,
+    active: byStatus.active || 0,
+    trial: byStatus.trial || 0,
+    expired: byStatus.expired || 0,
     totalStudents: students,
     totalTeachers: teachers,
-  };
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  const monthlyRevenue = payments
-    .filter((p) => p.paidAt && p.paidAt.getFullYear() === year && p.paidAt.getMonth() === month)
-    .reduce((s, p) => s + (p.amount || 0), 0);
-  const annualRevenue = payments
-    .filter((p) => p.paidAt && p.paidAt.getFullYear() === year)
-    .reduce((s, p) => s + (p.amount || 0), 0);
-  res.json({
-    ...counts,
-    monthlyRevenue,
-    annualRevenue,
-    newSchools: schools.filter((s) => s.createdAt >= startOfMonth()).length,
-    pendingPayments: schools.filter((s) => s.status === 'trial' || s.status === 'expired').length,
-    schools: toApi(schools.slice(-8).reverse()),
+    monthlyRevenue: monthly._sum.amount || 0,
+    annualRevenue: annual._sum.amount || 0,
+    newSchools,
+    pendingPayments,
+    schools: toApi(schools),
     plans: PLANS,
   });
 });
@@ -53,13 +70,16 @@ export const schoolDashboard = asyncHandler(async (req, res) => {
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const monthStart = startOfMonth();
+  const month = today.getMonth() + 1;
+  const day = today.getDate();
 
   const [
     students,
     teachers,
     classes,
-    todayAttn,
-    invoices,
+    attnCounts,
+    attnTaken,
+    pendingFees,
     todayPay,
     monthPay,
     exams,
@@ -67,15 +87,21 @@ export const schoolDashboard = asyncHandler(async (req, res) => {
     notices,
     enquiries,
     homework,
+    birthdays,
   ] = await Promise.all([
     prisma.student.count({ where: { tenantId: tid, status: 'active' } }),
     prisma.teacher.count({ where: { tenantId: tid, status: 'active' } }),
     prisma.schoolClass.count({ where: { tenantId: tid } }),
-    prisma.attendanceSheet.findMany({
-      where: { tenantId: tid, date: today },
-      include: { records: true },
+    prisma.attendanceRecord.groupBy({
+      by: ['status'],
+      where: { sheet: { tenantId: tid, date: today } },
+      _count: { _all: true },
     }),
-    prisma.feeInvoice.findMany({ where: { tenantId: tid } }),
+    prisma.attendanceSheet.count({ where: { tenantId: tid, date: today } }),
+    prisma.feeInvoice.aggregate({
+      where: { tenantId: tid, due: { gt: 0 } },
+      _sum: { due: true },
+    }),
     prisma.feePayment.aggregate({
       where: { tenantId: tid, paidAt: { gte: today, lt: tomorrow } },
       _sum: { amount: true },
@@ -84,49 +110,69 @@ export const schoolDashboard = asyncHandler(async (req, res) => {
       where: { tenantId: tid, paidAt: { gte: monthStart } },
       _sum: { amount: true },
     }),
-    prisma.exam.findMany({ where: { tenantId: tid }, orderBy: { startDate: 'desc' }, take: 5 }),
+    prisma.exam.findMany({
+      where: { tenantId: tid },
+      orderBy: { startDate: 'desc' },
+      take: 5,
+      select: { id: true, name: true, status: true, startDate: true, endDate: true },
+    }),
     prisma.calendarEvent.findMany({
       where: { tenantId: tid, startDate: { gte: today } },
       orderBy: { startDate: 'asc' },
       take: 5,
+      select: { id: true, title: true, startDate: true, type: true },
     }),
-    prisma.notice.findMany({ where: { tenantId: tid }, orderBy: { createdAt: 'desc' }, take: 6 }),
-    prisma.enquiry.findMany({ where: { tenantId: tid }, orderBy: { createdAt: 'desc' }, take: 6 }),
+    prisma.notice.findMany({
+      where: { tenantId: tid },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+      select: { id: true, title: true, createdAt: true },
+    }),
+    prisma.enquiry.findMany({
+      where: { tenantId: tid },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+      select: { id: true, studentName: true, classApplying: true, status: true },
+    }),
     prisma.homework.findMany({
       where: { tenantId: tid },
       orderBy: { createdAt: 'desc' },
       take: 5,
-      include: { subject: true, class: true },
+      select: {
+        id: true,
+        title: true,
+        dueDate: true,
+        subject: { select: { id: true, name: true } },
+        class: { select: { id: true, name: true } },
+      },
     }),
+    prisma.$queryRaw`
+      SELECT id, "firstName", "lastName", dob
+      FROM students
+      WHERE "tenantId" = ${tid}::uuid
+        AND status = 'active'
+        AND dob IS NOT NULL
+        AND EXTRACT(MONTH FROM dob) = ${month}
+        AND EXTRACT(DAY FROM dob) = ${day}
+      LIMIT 8
+    `,
   ]);
 
-  let present = 0;
-  let absent = 0;
-  let leave = 0;
-  todayAttn.forEach((a) => {
-    a.records.forEach((r) => {
-      if (r.status === 'present' || r.status === 'late') present += 1;
-      else if (r.status === 'leave') leave += 1;
-      else absent += 1;
-    });
-  });
-
-  const pendingFees = invoices.reduce((s, i) => s + (i.due || 0), 0);
-
-  const studentsWithDob = await prisma.student.findMany({
-    where: { tenantId: tid, status: 'active', dob: { not: null } },
-    take: 500,
-  });
-  const birthdays = studentsWithDob
-    .filter((s) => s.dob.getMonth() === today.getMonth() && s.dob.getDate() === today.getDate())
-    .slice(0, 8);
+  const attn = countByStatus(attnCounts);
+  const present = (attn.present || 0) + (attn.late || 0);
+  const leave = attn.leave || 0;
+  const absent = (attn.absent || 0) + (attn.half_day || 0);
 
   res.json({
     students,
     teachers,
     classes,
-    attendance: { present, absent, leave, taken: todayAttn.length },
-    fees: { today: todayPay._sum.amount || 0, month: monthPay._sum.amount || 0, pending: pendingFees },
+    attendance: { present, absent, leave, taken: attnTaken },
+    fees: {
+      today: todayPay._sum.amount || 0,
+      month: monthPay._sum.amount || 0,
+      pending: pendingFees._sum.due || 0,
+    },
     exams: toApi(exams),
     events: toApi(events),
     notices: toApi(notices),
@@ -138,26 +184,44 @@ export const schoolDashboard = asyncHandler(async (req, res) => {
 
 export const teacherDashboard = asyncHandler(async (req, res) => {
   const tid = req.tenantId;
-  const teacher = await prisma.teacher.findFirst({
-    where: { tenantId: tid, userId: req.user._id },
-  });
-  const assigned = teacher
-    ? await prisma.classSubject.findMany({
-        where: { tenantId: tid, teacherId: teacher.id },
-        include: { class: true, section: true, subject: true },
-      })
-    : [];
-  const homework = await prisma.homework.findMany({
-    where: { tenantId: tid, ...(teacher ? { teacherId: teacher.id } : {}) },
-    orderBy: { createdAt: 'desc' },
-    take: 8,
-    include: { class: true, subject: true },
-  });
-  const notices = await prisma.notice.findMany({
-    where: { tenantId: tid },
-    orderBy: { createdAt: 'desc' },
-    take: 5,
-  });
+  const teacherId = req.user.linkedTeacherId;
+  const teacherWhere = teacherId
+    ? { id: teacherId, tenantId: tid }
+    : { tenantId: tid, userId: req.user._id };
+
+  const [teacher, assigned, homework, notices] = await Promise.all([
+    prisma.teacher.findFirst({
+      where: teacherWhere,
+      select: { id: true, name: true, designation: true, department: true, employeeId: true },
+    }),
+    prisma.classSubject.findMany({
+      where: {
+        tenantId: tid,
+        ...(teacherId ? { teacherId } : { teacher: { userId: req.user._id } }),
+      },
+      include: {
+        class: { select: { id: true, name: true } },
+        section: { select: { id: true, name: true } },
+        subject: { select: { id: true, name: true } },
+      },
+    }),
+    prisma.homework.findMany({
+      where: { tenantId: tid, ...(teacherId ? { teacherId } : {}) },
+      orderBy: { createdAt: 'desc' },
+      take: 8,
+      include: {
+        class: { select: { id: true, name: true } },
+        subject: { select: { id: true, name: true } },
+      },
+    }),
+    prisma.notice.findMany({
+      where: { tenantId: tid },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      select: { id: true, title: true, createdAt: true },
+    }),
+  ]);
+
   res.json({
     teacher: toApi(teacher),
     assigned: toApi(assigned),
@@ -168,36 +232,60 @@ export const teacherDashboard = asyncHandler(async (req, res) => {
 
 export const parentDashboard = asyncHandler(async (req, res) => {
   const tid = req.tenantId;
+  const parentId = req.user.linkedParentId;
   const parent = await prisma.parent.findFirst({
-    where: { tenantId: tid, userId: req.user._id },
-    include: { students: { include: { class: true, section: true } } },
+    where: parentId ? { id: parentId, tenantId: tid } : { tenantId: tid, userId: req.user._id },
+    include: {
+      students: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          classId: true,
+          sectionId: true,
+          class: { select: { id: true, name: true } },
+          section: { select: { id: true, name: true } },
+        },
+      },
+    },
   });
   const studentIds = parent?.students?.map((s) => s.id) || [];
-  const invoices = await prisma.feeInvoice.findMany({
-    where: { tenantId: tid, studentId: { in: studentIds } },
-    include: { items: true },
-  });
-  const homework = await prisma.homework.findMany({
-    where: { tenantId: tid },
-    orderBy: { dueDate: 'asc' },
-    take: 8,
-    include: { subject: true, class: true },
-  });
-  const notices = await prisma.notice.findMany({
-    where: { tenantId: tid },
-    orderBy: { createdAt: 'desc' },
-    take: 6,
-  });
-  const events = await prisma.calendarEvent.findMany({
-    where: { tenantId: tid },
-    orderBy: { startDate: 'asc' },
-    take: 5,
-  });
-  const exams = await prisma.exam.findMany({
-    where: { tenantId: tid },
-    orderBy: { startDate: 'desc' },
-    take: 4,
-  });
+  const classIds = [...new Set((parent?.students || []).map((s) => s.classId).filter(Boolean))];
+
+  const [invoices, homework, notices, events, exams] = await Promise.all([
+    prisma.feeInvoice.findMany({
+      where: { tenantId: tid, studentId: { in: studentIds } },
+      select: { id: true, due: true, total: true, status: true, invoiceNo: true },
+    }),
+    prisma.homework.findMany({
+      where: { tenantId: tid, ...(classIds.length ? { classId: { in: classIds } } : {}) },
+      orderBy: { dueDate: 'asc' },
+      take: 8,
+      include: {
+        subject: { select: { id: true, name: true } },
+        class: { select: { id: true, name: true } },
+      },
+    }),
+    prisma.notice.findMany({
+      where: { tenantId: tid },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+      select: { id: true, title: true, createdAt: true },
+    }),
+    prisma.calendarEvent.findMany({
+      where: { tenantId: tid, startDate: { gte: startOfDay() } },
+      orderBy: { startDate: 'asc' },
+      take: 5,
+      select: { id: true, title: true, startDate: true },
+    }),
+    prisma.exam.findMany({
+      where: { tenantId: tid },
+      orderBy: { startDate: 'desc' },
+      take: 4,
+      select: { id: true, name: true, startDate: true, status: true },
+    }),
+  ]);
+
   res.json({
     parent: toApi(parent),
     invoices: toApi(invoices),
@@ -210,26 +298,41 @@ export const parentDashboard = asyncHandler(async (req, res) => {
 
 export const studentDashboard = asyncHandler(async (req, res) => {
   const tid = req.tenantId;
+  const studentId = req.user.linkedStudentId;
   const student = await prisma.student.findFirst({
-    where: { tenantId: tid, userId: req.user._id },
-    include: { class: true, section: true },
+    where: studentId ? { id: studentId, tenantId: tid } : { tenantId: tid, userId: req.user._id },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      rollNo: true,
+      classId: true,
+      sectionId: true,
+      class: { select: { id: true, name: true } },
+      section: { select: { id: true, name: true } },
+    },
   });
   if (!student) return res.json({ student: null });
-  const homework = await prisma.homework.findMany({
-    where: { tenantId: tid, classId: student.classId },
-    orderBy: { dueDate: 'asc' },
-    take: 8,
-    include: { subject: true },
-  });
-  const notices = await prisma.notice.findMany({
-    where: { tenantId: tid },
-    orderBy: { createdAt: 'desc' },
-    take: 6,
-  });
-  const invoices = await prisma.feeInvoice.findMany({
-    where: { tenantId: tid, studentId: student.id },
-    include: { items: true },
-  });
+
+  const [homework, notices, invoices] = await Promise.all([
+    prisma.homework.findMany({
+      where: { tenantId: tid, classId: student.classId },
+      orderBy: { dueDate: 'asc' },
+      take: 8,
+      include: { subject: { select: { id: true, name: true } } },
+    }),
+    prisma.notice.findMany({
+      where: { tenantId: tid },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+      select: { id: true, title: true, createdAt: true },
+    }),
+    prisma.feeInvoice.findMany({
+      where: { tenantId: tid, studentId: student.id },
+      select: { id: true, due: true, total: true, status: true, invoiceNo: true },
+    }),
+  ]);
+
   res.json({
     student: toApi(student),
     homework: toApi(homework),

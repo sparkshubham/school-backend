@@ -6,14 +6,18 @@ export const getSheet = asyncHandler(async (req, res) => {
   const { classId, sectionId, date } = req.query;
   if (!classId || !date) throw new AppError('classId and date are required');
   const day = dateOnly(date);
-  const students = await prisma.student.findMany({
-    where: tenantWhere(req, { classId, ...(sectionId ? { sectionId } : {}), status: 'active' }),
-    orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
-  });
-  const existing = await prisma.attendanceSheet.findFirst({
-    where: tenantWhere(req, { classId, ...(sectionId ? { sectionId } : {}), date: day }),
-    include: { records: true },
-  });
+  const studentWhere = tenantWhere(req, { classId, ...(sectionId ? { sectionId } : {}), status: 'active' });
+  const [students, existing] = await Promise.all([
+    prisma.student.findMany({
+      where: studentWhere,
+      orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
+      select: { id: true, firstName: true, lastName: true, rollNo: true, admissionNo: true },
+    }),
+    prisma.attendanceSheet.findFirst({
+      where: tenantWhere(req, { classId, ...(sectionId ? { sectionId } : {}), date: day }),
+      include: { records: { select: { id: true, studentId: true, status: true } } },
+    }),
+  ]);
   res.json({ students: toApi(students), attendance: toApi(existing) });
 });
 
@@ -67,30 +71,51 @@ export const reports = asyncHandler(async (req, res) => {
     filter.date = {};
     if (from) filter.date.gte = dateOnly(from);
     if (to) filter.date.lte = dateOnly(to);
+  } else {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    filter.date = { gte: dateOnly(start), lte: dateOnly(end) };
   }
-  const sheets = await prisma.attendanceSheet.findMany({
-    where: filter,
-    include: { class: true, section: true, records: true },
+
+  const grouped = await prisma.attendanceRecord.groupBy({
+    by: ['studentId', 'status'],
+    where: {
+      sheet: filter,
+      ...(studentId ? { studentId } : {}),
+    },
+    _count: { _all: true },
   });
+
   const byStudent = {};
-  sheets.forEach((sheet) => {
-    sheet.records.forEach((r) => {
-      const id = String(r.studentId);
-      if (studentId && id !== studentId) return;
-      if (!byStudent[id]) byStudent[id] = { present: 0, absent: 0, late: 0, leave: 0, half_day: 0, total: 0 };
-      byStudent[id][r.status] += 1;
-      byStudent[id].total += 1;
-    });
+  grouped.forEach((row) => {
+    const id = String(row.studentId);
+    if (!byStudent[id]) byStudent[id] = { present: 0, absent: 0, late: 0, leave: 0, half_day: 0, total: 0 };
+    byStudent[id][row.status] += row._count._all;
+    byStudent[id].total += row._count._all;
   });
+
   const ids = Object.keys(byStudent);
-  const students = await prisma.student.findMany({
-    where: { id: { in: ids } },
-    include: { class: true, section: true },
-  });
+  const students = ids.length
+    ? await prisma.student.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          rollNo: true,
+          class: { select: { id: true, name: true } },
+          section: { select: { id: true, name: true } },
+        },
+      })
+    : [];
+
   const rows = students.map((s) => {
     const stats = byStudent[String(s.id)];
-    const pct = stats.total ? Math.round(((stats.present + stats.late + stats.half_day * 0.5) / stats.total) * 1000) / 10 : 0;
+    const pct = stats.total
+      ? Math.round(((stats.present + stats.late + stats.half_day * 0.5) / stats.total) * 1000) / 10
+      : 0;
     return { student: toApi(s), ...stats, percentage: pct, low: pct < 75 };
   });
-  res.json({ sheets: sheets.length, rows: rows.sort((a, b) => a.percentage - b.percentage) });
+  res.json({ sheets: grouped.length, rows: rows.sort((a, b) => a.percentage - b.percentage) });
 });

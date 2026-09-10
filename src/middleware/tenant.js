@@ -6,7 +6,18 @@ import { toApi } from '../utils/serialize.js';
 export async function attachTenant(req, res, next) {
   try {
     if (req.user?.role === 'super_admin' || !req.tenantId) return next();
-    const tenant = await prisma.tenant.findUnique({ where: { id: req.tenantId } });
+    if (req.tenantStatus) {
+      if (req.tenantStatus === 'suspended') throw new AppError('This school account is suspended', 403);
+      if (req.tenantStatus === 'expired') throw new AppError('Subscription has expired. Contact support.', 403);
+      if (!req.modules?.length) {
+        req.modules = PLANS[req.plan]?.modules || PLANS.basic.modules;
+      }
+      return next();
+    }
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.tenantId },
+      select: { id: true, status: true, plan: true, modules: true, name: true },
+    });
     if (!tenant) throw new AppError('School not found', 404);
     if (tenant.status === 'suspended') throw new AppError('This school account is suspended', 403);
     if (tenant.status === 'expired') throw new AppError('Subscription has expired. Contact support.', 403);

@@ -1,6 +1,6 @@
 import { prisma } from '../config/db.js';
 import { AppError } from '../utils/errors.js';
-import { verifyAccess } from '../utils/tokens.js';
+import { verifyAccess, userFromAccessToken } from '../utils/tokens.js';
 import { toApi } from '../utils/serialize.js';
 
 export async function requireAuth(req, res, next) {
@@ -9,6 +9,14 @@ export async function requireAuth(req, res, next) {
     const token = header.startsWith('Bearer ') ? header.slice(7) : req.cookies?.accessToken;
     if (!token) throw new AppError('Authentication required', 401);
     const decoded = verifyAccess(token);
+    if (decoded.role && decoded.sub && decoded.email) {
+      req.user = userFromAccessToken(decoded);
+      req.tenantId = decoded.tenantId || null;
+      req.tenantStatus = decoded.tenantStatus || null;
+      req.plan = decoded.plan || null;
+      req.modules = decoded.modules || null;
+      return next();
+    }
     const user = await prisma.user.findUnique({
       where: { id: decoded.sub },
       omit: { password: true },

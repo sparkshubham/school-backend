@@ -10,9 +10,16 @@ function invoiceNo() {
 }
 
 const structureInclude = { class: true, session: true, items: true };
-const invoiceInclude = {
-  items: true,
-  student: { include: { class: true, section: true } },
+const invoiceListInclude = {
+  student: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      class: { select: { id: true, name: true } },
+      section: { select: { id: true, name: true } },
+    },
+  },
 };
 
 export const listStructures = asyncHandler(async (req, res) => {
@@ -61,14 +68,22 @@ export const generateInvoices = asyncHandler(async (req, res) => {
   if (!structure) throw new AppError('Fee structure not found for this class');
   const students = await prisma.student.findMany({
     where: tenantWhere(req, { classId, status: 'active' }),
+    select: { id: true },
   });
+  if (!students.length) return res.json({ created: 0, items: [] });
+  const existingIds = await prisma.feeInvoice.findMany({
+    where: {
+      tenantId: req.tenantId,
+      studentId: { in: students.map((s) => s.id) },
+      sessionId: structure.sessionId,
+    },
+    select: { studentId: true },
+  });
+  const have = new Set(existingIds.map((e) => e.studentId));
   const created = [];
   const total = structure.items.reduce((s, i) => s + (i.amount || 0), 0);
   for (const student of students) {
-    const exists = await prisma.feeInvoice.findFirst({
-      where: { tenantId: req.tenantId, studentId: student.id, sessionId: structure.sessionId },
-    });
-    if (exists) continue;
+    if (have.has(student.id)) continue;
     created.push(
       await prisma.feeInvoice.create({
         data: {
@@ -98,7 +113,7 @@ export const listInvoices = asyncHandler(async (req, res) => {
   if (req.query.studentId) filter.studentId = req.query.studentId;
   const items = await prisma.feeInvoice.findMany({
     where: filter,
-    include: invoiceInclude,
+    include: invoiceListInclude,
     orderBy: { createdAt: 'desc' },
     take: 200,
   });
@@ -152,19 +167,20 @@ export const payments = asyncHandler(async (req, res) => {
 });
 
 export const feeReport = asyncHandler(async (req, res) => {
-  const invoices = await prisma.feeInvoice.findMany({
-    where: tenantWhere(req, {}),
-    include: { student: { include: { class: true } }, items: true },
-  });
-  const paymentsList = await prisma.feePayment.findMany({ where: tenantWhere(req, {}) });
-  const collected = paymentsList.reduce((s, p) => s + p.amount, 0);
-  const pending = invoices.reduce((s, i) => s + (i.due || 0), 0);
-  const overdue = invoices.filter((i) => i.due > 0 && i.dueDate && i.dueDate < new Date());
+  const where = tenantWhere(req, {});
+  const [collected, pending, overdue] = await Promise.all([
+    prisma.feePayment.aggregate({ where, _sum: { amount: true } }),
+    prisma.feeInvoice.aggregate({ where, _sum: { due: true } }),
+    prisma.feeInvoice.aggregate({
+      where: { ...where, due: { gt: 0 }, dueDate: { lt: new Date() } },
+      _sum: { due: true },
+      _count: { _all: true },
+    }),
+  ]);
   res.json({
-    collected,
-    pending,
-    overdueAmount: overdue.reduce((s, i) => s + i.due, 0),
-    overdueCount: overdue.length,
-    invoices: toApi(invoices),
+    collected: collected._sum.amount || 0,
+    pending: pending._sum.due || 0,
+    overdueAmount: overdue._sum.due || 0,
+    overdueCount: overdue._count._all || 0,
   });
 });

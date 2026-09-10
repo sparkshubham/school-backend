@@ -37,7 +37,7 @@ export function createApp() {
       credentials: true,
     })
   );
-  app.use(morgan('dev'));
+  if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
   app.use(express.json({ limit: '10mb' }));
   app.use(cookieParser());
   app.use('/uploads', express.static(path.join(__dirname, '..', process.env.UPLOAD_DIR || 'uploads')));

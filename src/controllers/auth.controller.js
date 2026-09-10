@@ -1,6 +1,6 @@
 import { prisma } from '../config/db.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
-import { signAccessToken, signRefreshToken, verifyRefresh, publicUser } from '../utils/tokens.js';
+import { signAccessToken, signRefreshToken, verifyRefresh, publicUser, authPayload } from '../utils/tokens.js';
 import { comparePassword } from '../utils/password.js';
 import { toApi } from '../utils/serialize.js';
 
@@ -12,9 +12,9 @@ const cookieOpts = {
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
-function issueTokens(user, res) {
+function issueTokens(user, res, school = null) {
   const apiUser = toApi(user);
-  const payload = { sub: String(apiUser._id), role: apiUser.role, tenantId: apiUser.tenantId || null };
+  const payload = authPayload(apiUser, school);
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
   res.cookie('refreshToken', refreshToken, cookieOpts);
@@ -31,14 +31,15 @@ export const login = asyncHandler(async (req, res) => {
     throw new AppError('Invalid email or password', 401);
   }
   if (user.status !== 'active') throw new AppError('Account is inactive', 403);
-  const updated = await prisma.user.update({
-    where: { id: user.id },
-    data: { lastLogin: new Date() },
-  });
-  const tokens = issueTokens(updated, res);
-  let school = null;
-  if (updated.tenantId) school = toApi(await prisma.tenant.findUnique({ where: { id: updated.tenantId } }));
-  res.json({ ...tokens, school });
+  const [, school] = await Promise.all([
+    prisma.user.update({
+      where: { id: user.id },
+      data: { lastLogin: new Date() },
+    }),
+    user.tenantId ? prisma.tenant.findUnique({ where: { id: user.tenantId } }) : null,
+  ]);
+  const tokens = issueTokens(user, res, school);
+  res.json({ ...tokens, school: school ? toApi(school) : null });
 });
 
 export const refresh = asyncHandler(async (req, res) => {
@@ -52,12 +53,35 @@ export const refresh = asyncHandler(async (req, res) => {
   }
   const user = await prisma.user.findUnique({ where: { id: decoded.sub } });
   if (!user || user.status !== 'active') throw new AppError('Account is not active', 401);
-  res.json(issueTokens(user, res));
+  const school = user.tenantId
+    ? await prisma.tenant.findUnique({
+        where: { id: user.tenantId },
+        select: { status: true, plan: true, modules: true },
+      })
+    : null;
+  res.json(issueTokens(user, res, school));
 });
 
 export const me = asyncHandler(async (req, res) => {
   let school = null;
-  if (req.tenantId) school = toApi(await prisma.tenant.findUnique({ where: { id: req.tenantId } }));
+  if (req.tenantId) {
+    school = toApi(
+      await prisma.tenant.findUnique({
+        where: { id: req.tenantId },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          logo: true,
+          plan: true,
+          status: true,
+          city: true,
+          modules: true,
+          branding: true,
+        },
+      })
+    );
+  }
   res.json({ user: publicUser(req.user), school });
 });
 

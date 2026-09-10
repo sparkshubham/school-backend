@@ -1,9 +1,9 @@
 import { prisma } from '../config/db.js';
 import { PLANS } from '../config/constants.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
-import { signAccessToken, signRefreshToken, publicUser } from '../utils/tokens.js';
+import { signAccessToken, signRefreshToken, publicUser, authPayload } from '../utils/tokens.js';
 import { hashPassword } from '../utils/password.js';
-import { flattenInput, toApi } from '../utils/serialize.js';
+import { flattenInput, toApi, tenantWhere } from '../utils/serialize.js';
 
 export const listSchools = asyncHandler(async (req, res) => {
   const q = (req.query.q || '').trim();
@@ -86,19 +86,51 @@ export const loginAsAdmin = asyncHandler(async (req, res) => {
     where: { tenantId: req.params.id, role: 'school_admin', status: 'active' },
   });
   if (!admin) throw new AppError('No school admin found', 404);
+  const school = await prisma.tenant.findUnique({ where: { id: admin.tenantId } });
   const apiUser = toApi(admin);
-  const payload = { sub: String(apiUser._id), role: apiUser.role, tenantId: apiUser.tenantId };
+  const payload = authPayload(apiUser, school);
   res.json({
     accessToken: signAccessToken(payload),
     refreshToken: signRefreshToken(payload),
     user: publicUser(apiUser),
-    school: toApi(await prisma.tenant.findUnique({ where: { id: admin.tenantId } })),
+    school: toApi(school),
+  });
+});
+
+export const getMeta = asyncHandler(async (req, res) => {
+  const where = tenantWhere(req, {});
+  const [classes, sections, subjects, periods, sessions, teachers] = await Promise.all([
+    prisma.schoolClass.findMany({ where, orderBy: [{ order: 'asc' }, { numeric: 'asc' }] }),
+    prisma.section.findMany({
+      where,
+      include: { class: { select: { id: true, name: true } } },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.subject.findMany({ where, orderBy: { name: 'asc' } }),
+    prisma.period.findMany({ where, orderBy: { order: 'asc' } }),
+    prisma.academicSession.findMany({ where, orderBy: { createdAt: 'desc' } }),
+    prisma.teacher.findMany({
+      where,
+      select: { id: true, name: true, employeeId: true, status: true },
+      orderBy: { name: 'asc' },
+      take: 200,
+    }),
+  ]);
+  res.json({
+    classes: toApi(classes),
+    sections: toApi(sections),
+    subjects: toApi(subjects),
+    periods: toApi(periods),
+    sessions: toApi(sessions),
+    teachers: toApi(teachers),
   });
 });
 
 export const getProfile = asyncHandler(async (req, res) => {
-  const school = await prisma.tenant.findUnique({ where: { id: req.tenantId } });
-  const branches = await prisma.branch.findMany({ where: { tenantId: req.tenantId } });
+  const [school, branches] = await Promise.all([
+    prisma.tenant.findUnique({ where: { id: req.tenantId } }),
+    prisma.branch.findMany({ where: { tenantId: req.tenantId } }),
+  ]);
   res.json({ school: toApi(school), branches: toApi(branches) });
 });
 

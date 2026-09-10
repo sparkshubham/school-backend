@@ -82,9 +82,10 @@ export function createCrud(model, options = {}) {
           skip: (page - 1) * limit,
           take: limit,
         }),
-        db.count({ where }),
+        req.query.page || req.query.limit ? db.count({ where }) : Promise.resolve(null),
       ]);
-      res.json({ items: toApi(items), total, page, pages: Math.ceil(total / limit) });
+      const resolvedTotal = total ?? items.length;
+      res.json({ items: toApi(items), total: resolvedTotal, page, pages: Math.ceil(resolvedTotal / limit) });
     }),
 
     get: asyncHandler(async (req, res) => {

@@ -36,3 +36,35 @@ export function publicUser(user) {
     linkedTeacherId: user.linkedTeacherId,
   };
 }
+
+export function authPayload(user, school = null) {
+  const id = user._id || user.id;
+  return {
+    sub: String(id),
+    role: user.role,
+    tenantId: user.tenantId || null,
+    name: user.name,
+    email: user.email,
+    linkedStudentId: user.linkedStudentId || null,
+    linkedParentId: user.linkedParentId || null,
+    linkedTeacherId: user.linkedTeacherId || null,
+    tenantStatus: school?.status || null,
+    plan: school?.plan || null,
+    modules: school?.modules || null,
+  };
+}
+
+export function userFromAccessToken(decoded) {
+  return {
+    _id: decoded.sub,
+    id: decoded.sub,
+    role: decoded.role,
+    tenantId: decoded.tenantId || null,
+    name: decoded.name,
+    email: decoded.email,
+    permissions: decoded.permissions || [],
+    linkedStudentId: decoded.linkedStudentId || null,
+    linkedParentId: decoded.linkedParentId || null,
+    linkedTeacherId: decoded.linkedTeacherId || null,
+  };
+}

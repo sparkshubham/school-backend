@@ -10,6 +10,20 @@ const studentInclude = {
   parent: true,
 };
 
+const studentListSelect = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  admissionNo: true,
+  rollNo: true,
+  status: true,
+  fatherName: true,
+  classId: true,
+  sectionId: true,
+  class: { select: { id: true, name: true } },
+  section: { select: { id: true, name: true } },
+};
+
 export const listStudents = asyncHandler(async (req, res) => {
   const where = tenantWhere(req, {});
   if (req.query.status) where.status = req.query.status;
@@ -29,7 +43,7 @@ export const listStudents = asyncHandler(async (req, res) => {
   const [items, total] = await Promise.all([
     prisma.student.findMany({
       where,
-      include: studentInclude,
+      select: studentListSelect,
       orderBy: [{ rollNo: 'asc' }, { firstName: 'asc' }],
       skip: (page - 1) * limit,
       take: limit,

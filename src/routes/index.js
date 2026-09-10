@@ -27,6 +27,7 @@ r.post('/schools/:id/impersonate', requireRoles('super_admin'), school.loginAsAd
 
 r.get('/school/profile', school.getProfile);
 r.patch('/school/profile', requireRoles('school_admin', 'principal'), school.updateProfile);
+r.get('/meta', school.getMeta);
 
 r.get('/students', students.listStudents);
 r.get('/students/:id', students.getStudent);
