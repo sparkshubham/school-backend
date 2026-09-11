@@ -31,10 +31,10 @@ export const login = asyncHandler(async (req, res) => {
     throw new AppError('Invalid email or password', 401);
   }
   if (user.status !== 'active') throw new AppError('Account is inactive', 403);
-  await prisma.user.update({
+  prisma.user.update({
     where: { id: user.id },
     data: { lastLogin: new Date() },
-  });
+  }).catch(() => {});
   const school = user.tenantId ? await prisma.tenant.findUnique({ where: { id: user.tenantId } }) : null;
   const tokens = issueTokens(user, res, school);
   res.json({ ...tokens, school: school ? toApi(school) : null });

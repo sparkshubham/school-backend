@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db.js';
 import { PLANS } from '../config/constants.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
@@ -5,6 +6,18 @@ import { signAccessToken, signRefreshToken, publicUser, authPayload } from '../u
 import { hashPassword } from '../utils/password.js';
 import { flattenInput, toApi, tenantWhere } from '../utils/serialize.js';
 import { parsePaging, pageFromRows } from '../utils/paging.js';
+
+function jsonList(value) {
+  if (!value) return [];
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(value) ? value : [];
+}
 
 export const listSchools = asyncHandler(async (req, res) => {
   const q = (req.query.q || '').trim();
@@ -118,72 +131,73 @@ export const loginAsAdmin = asyncHandler(async (req, res) => {
 });
 
 export const getMeta = asyncHandler(async (req, res) => {
-  const where = tenantWhere(req, {});
   const requested = new Set(
     String(req.query.keys || 'classes,sections,periods,sessions')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
   );
-  const jobs = [];
-  const keys = [];
-  const add = (key, run) => {
-    if (!requested.has(key)) return;
-    keys.push(key);
-    jobs.push(run);
-  };
-  add('classes', () =>
-    prisma.schoolClass.findMany({
-      where,
-      orderBy: [{ order: 'asc' }, { numeric: 'asc' }],
-      select: { id: true, name: true, numeric: true },
-    })
-  );
-  add('sections', () =>
-    prisma.section.findMany({
-      where,
-      include: { class: { select: { id: true, name: true } } },
-      orderBy: { name: 'asc' },
-    })
-  );
-  add('subjects', () =>
-    prisma.subject.findMany({
-      where,
-      orderBy: { name: 'asc' },
-      select: { id: true, name: true, code: true },
-    })
-  );
-  add('periods', () =>
-    prisma.period.findMany({
-      where,
-      orderBy: { order: 'asc' },
-      select: { id: true, name: true, order: true, startTime: true, endTime: true, isBreak: true },
-    })
-  );
-  add('sessions', () =>
-    prisma.academicSession.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, name: true, isCurrent: true, startDate: true, endDate: true },
-    })
-  );
-  add('teachers', () =>
-    prisma.teacher.findMany({
-      where,
-      select: { id: true, name: true, employeeId: true, status: true },
-      orderBy: { name: 'asc' },
-      take: 100,
-    })
-  );
-  const values = [];
-  for (const job of jobs) {
-    values.push(await job());
-  }
-  const out = { classes: [], sections: [], subjects: [], periods: [], sessions: [], teachers: [] };
-  keys.forEach((key, i) => {
-    out[key] = toApi(values[i]);
+  const tid = tenantWhere(req, {}).tenantId || null;
+  const byTenant = tid ? Prisma.sql`"tenantId" = ${tid}::uuid` : Prisma.sql`TRUE`;
+  const byTenantS = tid ? Prisma.sql`s."tenantId" = ${tid}::uuid` : Prisma.sql`TRUE`;
+  const [row] = await prisma.$queryRaw`
+    SELECT
+      (
+        SELECT COALESCE(json_agg(x), '[]'::json) FROM (
+          SELECT id, name, numeric FROM school_classes
+          WHERE ${byTenant}
+          ORDER BY "order" ASC NULLS LAST, numeric ASC NULLS LAST
+        ) x
+      ) AS classes,
+      (
+        SELECT COALESCE(json_agg(x), '[]'::json) FROM (
+          SELECT s.id, s."tenantId", s.name, s.capacity, s."createdAt", s."updatedAt",
+                 json_build_object('id', c.id, 'name', c.name) AS class
+          FROM sections s
+          LEFT JOIN school_classes c ON c.id = s."classId"
+          WHERE ${byTenantS}
+          ORDER BY s.name ASC
+        ) x
+      ) AS sections,
+      (
+        SELECT COALESCE(json_agg(x), '[]'::json) FROM (
+          SELECT id, name, code FROM subjects
+          WHERE ${byTenant}
+          ORDER BY name ASC
+        ) x
+      ) AS subjects,
+      (
+        SELECT COALESCE(json_agg(x), '[]'::json) FROM (
+          SELECT id, name, "order", "startTime", "endTime", "isBreak" FROM periods
+          WHERE ${byTenant}
+          ORDER BY "order" ASC NULLS LAST
+        ) x
+      ) AS periods,
+      (
+        SELECT COALESCE(json_agg(x), '[]'::json) FROM (
+          SELECT id, name, "isCurrent", "startDate", "endDate" FROM academic_sessions
+          WHERE ${byTenant}
+          ORDER BY "createdAt" DESC
+        ) x
+      ) AS sessions,
+      (
+        SELECT COALESCE(json_agg(x), '[]'::json) FROM (
+          SELECT id, name, "employeeId", status FROM teachers
+          WHERE ${byTenant}
+          ORDER BY name ASC
+          LIMIT 100
+        ) x
+      ) AS teachers
+  `;
+  const pick = (key) => (requested.has(key) ? toApi(jsonList(row?.[key])) : []);
+  res.json({
+    classes: pick('classes'),
+    sections: pick('sections'),
+    subjects: pick('subjects'),
+    periods: pick('periods'),
+    sessions: pick('sessions'),
+    teachers: pick('teachers'),
   });
-  res.json(out);
 });
 
 export const getProfile = asyncHandler(async (req, res) => {

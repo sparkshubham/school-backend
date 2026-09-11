@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db.js';
 import { tenantWhere, flattenInput, toApi } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
@@ -179,20 +180,19 @@ export const payments = asyncHandler(async (req, res) => {
 });
 
 export const feeReport = asyncHandler(async (req, res) => {
-  const where = tenantWhere(req, {});
-  const [collected, pending, overdue] = await Promise.all([
-    prisma.feePayment.aggregate({ where, _sum: { amount: true } }),
-    prisma.feeInvoice.aggregate({ where, _sum: { due: true } }),
-    prisma.feeInvoice.aggregate({
-      where: { ...where, due: { gt: 0 }, dueDate: { lt: new Date() } },
-      _sum: { due: true },
-      _count: { _all: true },
-    }),
-  ]);
+  const tid = tenantWhere(req, {}).tenantId;
+  const tenantSql = tid ? Prisma.sql`AND "tenantId" = ${tid}::uuid` : Prisma.sql``;
+  const [row] = await prisma.$queryRaw`
+    SELECT
+      (SELECT COALESCE(SUM(amount), 0)::float FROM fee_payments WHERE TRUE ${tenantSql}) AS collected,
+      (SELECT COALESCE(SUM(due), 0)::float FROM fee_invoices WHERE TRUE ${tenantSql}) AS pending,
+      (SELECT COALESCE(SUM(due), 0)::float FROM fee_invoices WHERE due > 0 AND "dueDate" < NOW() ${tenantSql}) AS "overdueAmount",
+      (SELECT COUNT(*)::int FROM fee_invoices WHERE due > 0 AND "dueDate" < NOW() ${tenantSql}) AS "overdueCount"
+  `;
   res.json({
-    collected: collected._sum.amount || 0,
-    pending: pending._sum.due || 0,
-    overdueAmount: overdue._sum.due || 0,
-    overdueCount: overdue._count._all || 0,
+    collected: Number(row?.collected || 0),
+    pending: Number(row?.pending || 0),
+    overdueAmount: Number(row?.overdueAmount || 0),
+    overdueCount: Number(row?.overdueCount || 0),
   });
 });

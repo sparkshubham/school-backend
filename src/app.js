@@ -15,6 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function corsOrigins() {
   const defaults = [
     'http://localhost:5173',
+    'http://127.0.0.1:5173',
     'https://school-front-omega.vercel.app',
   ];
   const extra = (process.env.CLIENT_URL || '')
@@ -24,16 +25,27 @@ function corsOrigins() {
   return [...new Set([...defaults, ...extra])];
 }
 
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  const allowed = corsOrigins();
+  if (allowed.includes('*') || allowed.includes(origin)) return true;
+  try {
+    const { hostname } = new URL(origin);
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
+    if (hostname.includes('school-front-omega') && hostname.endsWith('.vercel.app')) return true;
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 export function createApp() {
   const app = express();
+  app.set('trust proxy', 1);
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(
     cors({
-      origin: (origin, cb) => {
-        const allowed = corsOrigins();
-        if (!origin || allowed.includes('*') || allowed.includes(origin)) return cb(null, true);
-        return cb(new Error(`CORS blocked: ${origin}`), false);
-      },
+      origin: (origin, cb) => cb(null, isAllowedOrigin(origin)),
       credentials: true,
     })
   );
