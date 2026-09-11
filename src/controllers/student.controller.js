@@ -66,6 +66,9 @@ export const createStudent = asyncHandler(async (req, res) => {
   delete body.parentName;
   delete body.parentPassword;
   delete body.parentPhone;
+  if (!body.firstName || !body.admissionNo) {
+    throw new AppError('First name and admission number are required');
+  }
   let student = await prisma.student.create({ data: body });
 
   if (req.body.createLogin && req.body.email) {

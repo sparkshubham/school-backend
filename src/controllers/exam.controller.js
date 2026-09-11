@@ -27,8 +27,10 @@ export const listExams = asyncHandler(async (req, res) => {
 });
 
 export const createExam = asyncHandler(async (req, res) => {
+  const data = flattenInput(req.body);
+  if (!data.name) throw new AppError('Exam name is required');
   const exam = await prisma.exam.create({
-    data: { ...flattenInput(req.body), tenantId: req.tenantId },
+    data: { ...data, tenantId: req.tenantId },
   });
   res.status(201).json(toApi(exam));
 });
