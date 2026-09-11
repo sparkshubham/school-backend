@@ -1,5 +1,5 @@
 import { prisma } from '../config/db.js';
-import { tenantWhere, toApi, flattenInput } from '../utils/serialize.js';
+import { tenantWhere, flattenInput, toApi, toPrismaInt, toPrismaFloat } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
 import { hashPassword } from '../utils/password.js';
 
@@ -44,11 +44,11 @@ export const createTeacher = asyncHandler(async (req, res) => {
       phone: body.phone || null,
       email: body.email || null,
       qualification: body.qualification || null,
-      experience: body.experience != null ? Number(body.experience) : null,
+      experience: toPrismaInt(body.experience),
       joiningDate: body.joiningDate || null,
       department: body.department || null,
       designation: body.designation || null,
-      salary: body.salary != null ? Number(body.salary) : null,
+      salary: toPrismaFloat(body.salary),
       status: body.status || 'active',
     },
   });

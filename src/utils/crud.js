@@ -47,7 +47,7 @@ export function createCrud(model, options = {}) {
 
   async function prepareData(req, forUpdate = false) {
     const data = flattenInput(req.body);
-    if (!forUpdate && req.user.role !== 'super_admin') data.tenantId = req.tenantId;
+    if (!forUpdate) data.tenantId = req.tenantId || data.tenantId;
     if (model === 'leaveRequest' && !data.userId) {
       data.userId = req.user._id || req.user.id;
       data.role = req.user.role;

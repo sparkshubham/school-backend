@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/db.js';
-import { tenantWhere, flattenInput, toApi } from '../utils/serialize.js';
+import { tenantWhere, flattenInput, toApi, toPrismaDate } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
 import { parsePaging, pageFromRows } from '../utils/paging.js';
 
@@ -103,7 +103,7 @@ export const generateInvoices = asyncHandler(async (req, res) => {
           total,
           paid: 0,
           due: total,
-          dueDate: dueDate || new Date(),
+          dueDate: toPrismaDate(dueDate) || new Date(),
           status: 'unpaid',
         },
         include: { items: true },

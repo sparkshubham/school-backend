@@ -69,6 +69,25 @@ export function emptyToNull(value) {
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
+const INT_KEYS = new Set(['numeric', 'order', 'experience', 'capacity', 'quantity', 'available']);
+const FLOAT_KEYS = new Set([
+  'salary',
+  'amount',
+  'total',
+  'paid',
+  'due',
+  'discount',
+  'lateFee',
+  'maxMarks',
+  'passMarks',
+  'obtained',
+  'marks',
+  'fine',
+  'priceMonthly',
+  'priceYearly',
+]);
+const BOOL_KEYS = new Set(['pinned', 'isCurrent', 'isMain', 'isBreak', 'optional']);
+
 export function toPrismaDate(value) {
   if (value == null || value === '') return null;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
@@ -78,6 +97,28 @@ export function toPrismaDate(value) {
   if (DATE_ONLY.test(s)) return new Date(`${s}T00:00:00.000Z`);
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function toPrismaInt(value) {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+export function toPrismaFloat(value) {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(String(value).trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+export function toPrismaBool(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+  const s = String(value).trim().toLowerCase();
+  if (['true', '1', 'on', 'yes'].includes(s)) return true;
+  if (['false', '0', 'off', 'no'].includes(s)) return false;
+  return null;
 }
 
 function isDateLikeKey(key) {
@@ -104,10 +145,27 @@ export function flattenInput(body = {}) {
   delete data.password;
 
   for (const [key, value] of Object.entries(data)) {
-    if (value === '') {
-      data[key] = null;
-    } else if (isPlainObject(value) && (value._id || value.id) && !Array.isArray(value)) {
+    if (value === '' || value == null) {
+      if (isDateLikeKey(key)) data[key] = null;
+      else delete data[key];
+      continue;
+    }
+    if (isPlainObject(value) && (value._id || value.id) && !Array.isArray(value)) {
       data[key] = value._id || value.id;
+      continue;
+    }
+    if (INT_KEYS.has(key)) {
+      const n = toPrismaInt(value);
+      if (n == null) delete data[key];
+      else data[key] = n;
+    } else if (FLOAT_KEYS.has(key)) {
+      const n = toPrismaFloat(value);
+      if (n == null) delete data[key];
+      else data[key] = n;
+    } else if (BOOL_KEYS.has(key)) {
+      const b = toPrismaBool(value);
+      if (b == null) delete data[key];
+      else data[key] = b;
     } else if (typeof value === 'string' && isDateLikeKey(key)) {
       data[key] = toPrismaDate(value);
     }

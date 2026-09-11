@@ -7,6 +7,54 @@ import { hashPassword } from '../utils/password.js';
 import { flattenInput, toApi, tenantWhere } from '../utils/serialize.js';
 import { parsePaging, pageFromRows } from '../utils/paging.js';
 
+const TENANT_KEYS = [
+  'name',
+  'slug',
+  'logo',
+  'email',
+  'phone',
+  'website',
+  'address',
+  'city',
+  'state',
+  'pincode',
+  'principalName',
+  'registrationNo',
+  'affiliation',
+  'academicSession',
+  'status',
+  'plan',
+  'modules',
+  'trialEndsAt',
+  'subscriptionEndsAt',
+  'branding',
+];
+
+function pickTenant(data) {
+  const out = {};
+  for (const key of TENANT_KEYS) {
+    if (data[key] !== undefined) out[key] = data[key];
+  }
+  return out;
+}
+
+function slugFromName(name) {
+  return String(name || 'school')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'school';
+}
+
+async function uniqueSlug(base) {
+  let slug = slugFromName(base);
+  for (let i = 0; i < 50; i += 1) {
+    const candidate = i === 0 ? slug : `${slug}-${i + 1}`;
+    const exists = await prisma.tenant.findUnique({ where: { slug: candidate }, select: { id: true } });
+    if (!exists) return candidate;
+  }
+  return `${slug}-${Date.now().toString(36)}`;
+}
+
 function jsonList(value) {
   if (!value) return [];
   if (typeof value === 'string') {
@@ -58,16 +106,18 @@ export const listSchools = asyncHandler(async (req, res) => {
 
 export const createSchool = asyncHandler(async (req, res) => {
   const body = { ...req.body };
-  if (!body.slug && body.name) {
-    body.slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  }
+  if (!body.name) throw new AppError('School name is required');
+  if (!body.adminEmail || !body.adminPassword) throw new AppError('Admin email and password are required');
+  if (!body.slug) body.slug = slugFromName(body.name);
   body.modules = PLANS[body.plan || 'basic']?.modules || PLANS.basic.modules;
   if (body.status === 'trial' && !body.trialEndsAt) {
     const d = new Date();
     d.setDate(d.getDate() + 14);
     body.trialEndsAt = d;
   }
-  const data = flattenInput(body);
+  const data = pickTenant(flattenInput(body));
+  data.slug = await uniqueSlug(data.slug || body.name);
+  if (!data.email) data.email = String(body.adminEmail).toLowerCase().trim();
   const school = await prisma.tenant.create({ data });
   await prisma.branch.create({
     data: {
@@ -106,11 +156,16 @@ export const getSchool = asyncHandler(async (req, res) => {
 });
 
 export const updateSchool = asyncHandler(async (req, res) => {
-  const body = flattenInput(req.body);
-  if (req.body.plan && !req.body.modules) body.modules = PLANS[req.body.plan]?.modules;
   const existing = await prisma.tenant.findUnique({ where: { id: req.params.id } });
   if (!existing) throw new AppError('School not found', 404);
-  const school = await prisma.tenant.update({ where: { id: req.params.id }, data: body });
+  const body = pickTenant(flattenInput(req.body));
+  if (req.body.plan && !req.body.modules) body.modules = PLANS[req.body.plan]?.modules;
+  if (req.body.slug && req.body.slug !== existing.slug) {
+    body.slug = await uniqueSlug(req.body.slug);
+  } else {
+    delete body.slug;
+  }
+  const school = await prisma.tenant.update({ where: { id: existing.id }, data: body });
   res.json(toApi(school));
 });
 
@@ -209,7 +264,7 @@ export const getProfile = asyncHandler(async (req, res) => {
 export const updateProfile = asyncHandler(async (req, res) => {
   const school = await prisma.tenant.update({
     where: { id: req.tenantId },
-    data: flattenInput(req.body),
+    data: pickTenant(flattenInput(req.body)),
   });
   res.json(toApi(school));
 });

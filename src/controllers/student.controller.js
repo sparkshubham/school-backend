@@ -66,6 +66,7 @@ export const createStudent = asyncHandler(async (req, res) => {
   delete body.parentName;
   delete body.parentPassword;
   delete body.parentPhone;
+  delete body.name;
   if (!body.firstName || !body.admissionNo) {
     throw new AppError('First name and admission number are required');
   }
@@ -130,9 +131,11 @@ export const createStudent = asyncHandler(async (req, res) => {
 export const updateStudent = asyncHandler(async (req, res) => {
   const existing = await prisma.student.findFirst({ where: tenantWhere(req, { id: req.params.id }) });
   if (!existing) throw new AppError('Student not found', 404);
+  const data = flattenInput(req.body);
+  delete data.name;
   const item = await prisma.student.update({
     where: { id: existing.id },
-    data: flattenInput(req.body),
+    data,
   });
   res.json(toApi(item));
 });
