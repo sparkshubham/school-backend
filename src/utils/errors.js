@@ -26,6 +26,20 @@ export function errorHandler(err, req, res, next) {
       status = 400;
       message = 'Related record was not found';
     }
+  } else if (
+    err instanceof Prisma.PrismaClientValidationError ||
+    err?.name === 'PrismaClientValidationError'
+  ) {
+    status = 400;
+    const last = String(err.message)
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .pop();
+    message =
+      last && !last.startsWith('Invalid `prisma')
+        ? last
+        : 'Invalid data. Check dates and required fields.';
   }
 
   if (status >= 500) console.error(err);

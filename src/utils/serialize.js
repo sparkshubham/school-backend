@@ -67,6 +67,23 @@ export function emptyToNull(value) {
   return value;
 }
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+export function toPrismaDate(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value !== 'string') return value;
+  const s = value.trim();
+  if (!s) return null;
+  if (DATE_ONLY.test(s)) return new Date(`${s}T00:00:00.000Z`);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isDateLikeKey(key) {
+  return /date$/i.test(key) || key === 'dob' || /(At)$/.test(key);
+}
+
 export function flattenInput(body = {}) {
   const data = { ...body };
   delete data.id;
@@ -91,6 +108,8 @@ export function flattenInput(body = {}) {
       data[key] = null;
     } else if (isPlainObject(value) && (value._id || value.id) && !Array.isArray(value)) {
       data[key] = value._id || value.id;
+    } else if (typeof value === 'string' && isDateLikeKey(key)) {
+      data[key] = toPrismaDate(value);
     }
   }
   return data;
@@ -107,6 +126,7 @@ export function tenantWhere(req, extra = {}) {
 }
 
 export function dateOnly(value) {
-  const d = new Date(value);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const converted = toPrismaDate(value);
+  if (!converted) return converted;
+  return new Date(Date.UTC(converted.getUTCFullYear(), converted.getUTCMonth(), converted.getUTCDate()));
 }

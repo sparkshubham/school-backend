@@ -1,5 +1,5 @@
 import { prisma } from '../config/db.js';
-import { tenantWhere, toApi } from '../utils/serialize.js';
+import { tenantWhere, toApi, flattenInput } from '../utils/serialize.js';
 import { asyncHandler, AppError } from '../utils/errors.js';
 import { hashPassword } from '../utils/password.js';
 
@@ -31,7 +31,9 @@ async function createTeacherLogin(teacher, { email, password, phone, tenantId })
 }
 
 export const createTeacher = asyncHandler(async (req, res) => {
-  const body = { ...req.body, tenantId: req.tenantId };
+  const password = req.body.password;
+  const body = flattenInput({ ...req.body, tenantId: req.tenantId });
+  if (!body.employeeId || !body.name) throw new AppError('Employee ID and name are required');
   const teacher = await prisma.teacher.create({
     data: {
       tenantId: req.tenantId,
@@ -54,7 +56,7 @@ export const createTeacher = asyncHandler(async (req, res) => {
   if (body.email) {
     login = await createTeacherLogin(teacher, {
       email: body.email,
-      password: body.password,
+      password,
       phone: body.phone,
       tenantId: req.tenantId,
     });
